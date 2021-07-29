@@ -97,6 +97,7 @@ PYBIND11_MODULE(chiapos, m)
             })
         .def("get_size", [](DiskProver &dp) { return dp.GetSize(); })
         .def("get_filename", [](DiskProver &dp) { return dp.GetFilename(); })
+        .def("get_remoteness", [](DiskProver &dp) {return dp.GetRemoteness();})
         .def(
             "get_qualities_for_challenge",
             [](DiskProver &dp, const py::bytes &challenge) {

@@ -51,6 +51,8 @@ set(FSE_FILES
 
 include_directories(
   ${INCLUDE_DIRECTORIES}
+  # YOU NEED TO INCLUDE YOUR cURL PATH HERE INSTEAD OF THIS ONE
+  C:/Users/matej/Documents/GitHub/vcpkg/installed/x64-windows/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../lib/include
   ${cxxopts_SOURCE_DIR}/include
   ${gulrak_SOURCE_DIR}/include/ghc

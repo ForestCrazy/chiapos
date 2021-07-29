@@ -1,4 +1,11 @@
-# Chia Proof of Space
+# chia-blockchain remote farming (INDEV)
+
+This client fork (no changes to the protocol, runs on Chia mainnet) allows a farmer to store their plots in a remote location accessible via HTTP(S).
+Intended use case is when one has a (preferably) free, unused cloud storage subscription and want to use it to farm some XCH instead of leaving it empty.
+You will also need the modded Python client: [Chia Blockchain](https://github.com/GLise710/chia-blockchain)
+
+
+# Chia Proof of Space (original description)
 ![Build](https://github.com/Chia-Network/chiapos/workflows/Build/badge.svg)
 ![PyPI](https://img.shields.io/pypi/v/chiapos?logo=pypi)
 ![PyPI - Format](https://img.shields.io/pypi/format/chiapos?logo=pypi)

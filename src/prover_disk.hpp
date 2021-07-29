@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#define CURL_STATICLIB
+#define _CRT_SECURE_NO_WARNINGS
+
 #ifndef SRC_CPP_PROVER_DISK_HPP_
 #define SRC_CPP_PROVER_DISK_HPP_
 
@@ -35,6 +38,30 @@
 #include "entry_sizes.hpp"
 #include "util.hpp"
 
+#include <curl/curl.h>
+
+#define readData(destination, size)                     \
+        if (this->isRemote){                            \
+            ReadRemote(destination, seekPosition, size);\
+            seekPosition += size;                       \
+        } else {                                        \
+            SafeRead(disk_file, destination, size);     \
+        }
+
+#define seekData(position)                  \
+        if (this->isRemote){                \
+            seekPosition = position;        \
+        } else {                            \
+            SafeSeek(disk_file, position);  \
+        }
+
+size_t writeResponseChunk(void* ptr, size_t size, size_t nmemb, std::string* data) {
+	//std::cout << *data << std::endl;
+    //std::cout << size * nmemb << std::endl;
+    data->append((char*)ptr, size * nmemb);
+	return size * nmemb;
+}
+
 struct plot_header {
     uint8_t magic[19];
     uint8_t id[32];
@@ -43,23 +70,126 @@ struct plot_header {
     uint8_t fmt_desc[50];
 };
 
+struct cache_item {
+    uint8_t* data;
+    uint64_t start;
+    uint64_t end;
+    long long accessed;
+};
+
+class LocalCache {
+public:
+    LocalCache(){
+
+    }
+
+    bool getRange(uint64_t firstByte, uint64_t lastByte, uint8_t* target){
+        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
+            uint64_t itemStart = this->items[i].start;
+            uint64_t itemEnd = this->items[i].end;
+            if (itemStart <= firstByte && itemEnd >= lastByte){
+                //std::cout << "starting mempcy from cache first " << firstByte << " last " << lastByte << std::endl;
+                memcpy(target, this->items[i].data + (firstByte - itemStart), lastByte - firstByte + 1);
+                
+
+                auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
+                this->items[i].accessed = now;
+                
+                
+                this->cleanUp();
+                return true;
+            }
+        }
+        //std::cout << "getRange after loop\n";
+        this->cleanUp();
+        return false;
+    }
+
+    void cleanUp(){
+        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long deletionPoint = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count() - 5 * 60 * 1000;
+
+        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
+            if (this->items[i].accessed < deletionPoint){
+                delete[] (this->items[i].data);
+                this->items.erase(this->items.begin() + i);
+            }
+        }
+    }
+
+    void addItem(uint8_t* data, uint64_t size, uint64_t firstByte){
+        std::cout << "adding item to cache, range: " << firstByte << " " << firstByte + size - 1 << std::endl;
+        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
+        
+        uint8_t* itemData = new uint8_t[size];
+        if (!itemData){
+            throw std::runtime_error("Failed to allocate cache memory");
+        }
+
+        memcpy(itemData, data, size);
+        
+        this->items.push_back({
+            itemData,
+            firstByte,
+            firstByte + size - 1,
+            now
+        });
+    }
+
+private:
+    std::vector<cache_item> items = std::vector<cache_item>();
+};
 
 // The DiskProver, given a correctly formatted plot file, can efficiently generate valid proofs
 // of space, for a given challenge.
 class DiskProver {
-public:
+public:    
     // The constructor opens the file, and reads the contents of the file header. The table pointers
     // will be used to find and seek to all seven tables, at the time of proving.
     explicit DiskProver(const std::string& filename)
     {
+        std::cout << "DEBUG TEST " << (filename) << std::endl;
         struct plot_header header{};
-        this->filename = filename;
 
-        std::ifstream disk_file(filename, std::ios::in | std::ios::binary);
+        std::ifstream disk_file;
+
+
+        disk_file = std::ifstream(filename, std::ios::in | std::ios::binary);
 
         if (!disk_file.is_open()) {
-            throw std::invalid_argument("Invalid file " + filename);
+            throw std::invalid_argument("Invalid file at DiskProver construction " + filename);
         }
+
+
+        if (filename.find(std::string("--remoteplot--")) != std::string::npos){
+            this->isRemote = true;
+            this->filename = filename;
+            this->cache = LocalCache();
+
+            // get pointer to associated buffer object
+            std::filebuf* pbuf = disk_file.rdbuf();
+
+            // get file size using buffer's members
+            size_t size = pbuf->pubseekoff(0, disk_file.end, disk_file.in);
+            pbuf->pubseekpos(0, disk_file.in);
+
+            // allocate memory to contain file data
+            char* buffer = new char[size + 1];
+            buffer[size] = '\0';
+
+            // get file data
+            pbuf->sgetn(buffer, size);
+
+            this->baseURL = std::string(buffer);
+
+            std::cout << "Read baseURL: " << this->baseURL << std::endl;
+        }
+
+
+
+        
         // 19 bytes  - "Proof of Space Plot" (utf-8)
         // 32 bytes  - unique plot id
         // 1 byte    - k
@@ -68,7 +198,10 @@ public:
         // 2 bytes   - memo length
         // x bytes   - memo
 
-        SafeRead(disk_file, (uint8_t*)&header, sizeof(header));
+        uint64_t seekPosition = 0;
+
+        readData((uint8_t*)&header, sizeof(header))
+        
         if (memcmp(header.magic, "Proof of Space Plot", sizeof(header.magic)) != 0)
             throw std::invalid_argument("Invalid plot header magic");
 
@@ -83,24 +216,29 @@ public:
 
         memcpy(this->id, header.id, sizeof(header.id));
         this->k = header.k;
-        SafeSeek(disk_file, offsetof(struct plot_header, fmt_desc) + fmt_desc_len);
+        
+        seekData(offsetof(struct plot_header, fmt_desc) + fmt_desc_len)
 
         uint8_t size_buf[2];
-        SafeRead(disk_file, size_buf, 2);
+        readData(size_buf, 2)
+
         this->memo_size = Util::TwoBytesToInt(size_buf);
         this->memo = new uint8_t[this->memo_size];
-        SafeRead(disk_file, this->memo, this->memo_size);
-
+        readData(this->memo, this->memo_size)
         this->table_begin_pointers = std::vector<uint64_t>(11, 0);
         this->C2 = std::vector<uint64_t>();
 
         uint8_t pointer_buf[8];
         for (uint8_t i = 1; i < 11; i++) {
-            SafeRead(disk_file, pointer_buf, 8);
+            readData(pointer_buf, 8)
             this->table_begin_pointers[i] = Util::EightBytesToInt(pointer_buf);
         }
 
-        SafeSeek(disk_file, table_begin_pointers[9]);
+        if (this->isRemote){
+            seekPosition = table_begin_pointers[9];
+        } else {
+            seekData(table_begin_pointers[9])
+        }
 
         uint8_t c2_size = (Util::ByteAlign(k) / 8);
         uint32_t c2_entries = (table_begin_pointers[10] - table_begin_pointers[9]) / c2_size;
@@ -112,7 +250,7 @@ public:
         // read from disk the C1 and C3 entries.
         auto* c2_buf = new uint8_t[c2_size];
         for (uint32_t i = 0; i < c2_entries - 1; i++) {
-            SafeRead(disk_file, c2_buf, c2_size);
+            readData(c2_buf, c2_size)
             this->C2.push_back(Bits(c2_buf, c2_size, c2_size * 8).Slice(0, k).GetValue());
         }
 
@@ -139,21 +277,28 @@ public:
 
     uint8_t GetSize() const noexcept { return k; }
 
+    bool GetRemoteness() const noexcept { return isRemote; }
+
     // Given a challenge, returns a quality string, which is sha256(challenge + 2 adjecent x
     // values), from the 64 value proof. Note that this is more efficient than fetching all 64 x
     // values, which are in different parts of the disk.
     std::vector<LargeBits> GetQualitiesForChallenge(const uint8_t* challenge)
     {
+        std::cout << "Received a quality request" << std::endl;
         std::vector<LargeBits> qualities;
 
         std::lock_guard<std::mutex> l(_mtx);
 
         {
-            std::ifstream disk_file(filename, std::ios::in | std::ios::binary);
+            std::ifstream disk_file;
+            if (!(this->isRemote)){
+                disk_file = std::ifstream(filename, std::ios::in | std::ios::binary);
 
-            if (!disk_file.is_open()) {
-                throw std::invalid_argument("Invalid file " + filename);
+                if (!disk_file.is_open()) {
+                    throw std::invalid_argument("Invalid file " + filename);
+                }
             }
+            
 
             // This tells us how many f7 outputs (and therefore proofs) we have for this
             // challenge. The expected value is one proof.
@@ -203,15 +348,20 @@ public:
     // if there are multiple.
     LargeBits GetFullProof(const uint8_t* challenge, uint32_t index, bool parallel_read = true)
     {
+        std::cout << "Building a full proof" << std::endl;
         LargeBits full_proof;
 
         std::lock_guard<std::mutex> l(_mtx);
         {
-            std::ifstream disk_file(filename, std::ios::in | std::ios::binary);
+            std::ifstream disk_file;
+            if (!(this->isRemote)){
+                disk_file = std::ifstream(filename, std::ios::in | std::ios::binary);
 
-            if (!disk_file.is_open()) {
-                throw std::invalid_argument("Invalid file " + filename);
+                if (!disk_file.is_open()) {
+                    throw std::invalid_argument("Invalid file " + filename);
+                }
             }
+            
 
             std::vector<uint64_t> p7_entries = GetP7Entries(disk_file, challenge);
             if (p7_entries.empty() || index >= p7_entries.size()) {
@@ -248,33 +398,121 @@ private:
     std::vector<uint64_t> table_begin_pointers;
     std::vector<uint64_t> C2;
 
+    bool isRemote;
+    std::string baseURL;
+    LocalCache cache;
+
     // Using this method instead of simply seeking will prevent segfaults that would arise when
     // continuing the process of looking up qualities.
-    static void SafeSeek(std::ifstream& disk_file, uint64_t seek_location) {
+    void SafeSeek(std::ifstream& disk_file, uint64_t seek_location) {
         disk_file.seekg(seek_location);
 
         if (disk_file.fail()) {
             std::cout << "goodbit, failbit, badbit, eofbit: "
-                      << (disk_file.rdstate() & std::ifstream::goodbit)
-                      << (disk_file.rdstate() & std::ifstream::failbit)
-                      << (disk_file.rdstate() & std::ifstream::badbit)
-                      << (disk_file.rdstate() & std::ifstream::eofbit)
-                      << std::endl;
+                    << (disk_file.rdstate() & std::ifstream::goodbit)
+                    << (disk_file.rdstate() & std::ifstream::failbit)
+                    << (disk_file.rdstate() & std::ifstream::badbit)
+                    << (disk_file.rdstate() & std::ifstream::eofbit)
+                    << std::endl;
             throw std::runtime_error("badbit or failbit after seeking to " + std::to_string(seek_location));
         }
     }
 
-    static void SafeRead(std::ifstream& disk_file, uint8_t* target, uint64_t size) {
+    // would do void instead of uint64_t, but MSVC seems to not like this...
+    uint64_t ReadRemote(uint8_t* target, uint64_t seekPosition, uint64_t size){
+        if (this->cache.getRange(seekPosition, seekPosition + size - 1, target)){
+            //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
+            return size;
+        }
+
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            throw std::runtime_error("failed to initialize curl object");
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, this->baseURL.c_str());
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+        //curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.74.0");
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+
+
+        char rangeHeader[80];
+        uint64_t finalReadPosition = size < 16384 ? seekPosition + 16384 - 1 : seekPosition + size - 1;
+        //uint64_t finalReadPosition = seekPosition + size - 1;
+        sprintf(rangeHeader, "range: bytes=%llu-%llu", seekPosition, finalReadPosition);
+        
+
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, "accept: */*");
+        headers = curl_slist_append(headers, "accept-encoding: identity");
+        headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
+        headers = curl_slist_append(headers, rangeHeader);
+        headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
+        headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
+        headers = curl_slist_append(headers, "sec-fetch-dest: empty");
+        headers = curl_slist_append(headers, "sec-fetch-mode: cors");
+        headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
+        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
+        // you may need to enter cookie credentials here
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        std::string response_string;
+        std::string header_string;
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
+
+        long response_code;
+        
+
+        std::cout << std::endl << "Performing request, filename " << this->baseURL << std::endl;
+        std::cout << "Range: " << seekPosition << " - " << finalReadPosition << std::endl;
+
+        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+
+        CURLcode result = curl_easy_perform(curl);
+
+        std::cout << "Curl code: " << result << std::endl;
+        
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
+        timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+
+        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << size << " requested originally)" << std::endl;
+
+        curl_easy_cleanup(curl);
+        curl_slist_free_all(headers);
+        curl = NULL;
+
+        std::cout << "Request finished, response code: " << response_code << std::endl;
+        //std::cout << header_string << std::endl;
+        //std::cout << response_string << std::endl;
+
+        if (result != 0){
+            throw std::runtime_error("CURL failed");
+        }
+
+        
+        memcpy(target, response_string.data(), size);
+        this->cache.addItem((uint8_t*)((void*)(response_string.c_str())), finalReadPosition - seekPosition + 1, seekPosition);
+
+        return size;
+    }
+
+    void SafeRead(std::ifstream& disk_file, uint8_t* target, uint64_t size) {
         int64_t pos = disk_file.tellg();
         disk_file.read(reinterpret_cast<char*>(target), size);
 
         if (disk_file.fail()) {
             std::cout << "goodbit, failbit, badbit, eofbit: "
-                      << (disk_file.rdstate() & std::ifstream::goodbit)
-                      << (disk_file.rdstate() & std::ifstream::failbit)
-                      << (disk_file.rdstate() & std::ifstream::badbit)
-                      << (disk_file.rdstate() & std::ifstream::eofbit)
-                      << std::endl;
+                    << (disk_file.rdstate() & std::ifstream::goodbit)
+                    << (disk_file.rdstate() & std::ifstream::failbit)
+                    << (disk_file.rdstate() & std::ifstream::badbit)
+                    << (disk_file.rdstate() & std::ifstream::eofbit)
+                    << std::endl;
             throw std::runtime_error("badbit or failbit after reading size " +
                     std::to_string(size) + " at position " + std::to_string(pos));
         }
@@ -286,21 +524,23 @@ private:
     // are looking for.
     uint128_t ReadLinePoint(std::ifstream& disk_file, uint8_t table_index, uint64_t position)
     {
+        uint64_t seekPosition = 0;
+        
         uint64_t park_index = position / kEntriesPerPark;
         uint32_t park_size_bits = EntrySizes::CalculateParkSize(k, table_index) * 8;
 
-        SafeSeek(disk_file, table_begin_pointers[table_index] + (park_size_bits / 8) * park_index);
+        seekData(table_begin_pointers[table_index] + (park_size_bits / 8) * park_index)
 
         // This is the checkpoint at the beginning of the park
         uint16_t line_point_size = EntrySizes::CalculateLinePointSize(k);
         auto* line_point_bin = new uint8_t[line_point_size + 7];
-        SafeRead(disk_file, line_point_bin, line_point_size);
+        readData(line_point_bin, line_point_size)
         uint128_t line_point = Util::SliceInt128FromBytes(line_point_bin, 0, k * 2);
 
         // Reads EPP stubs
         uint32_t stubs_size_bits = EntrySizes::CalculateStubsSize(k) * 8;
         auto* stubs_bin = new uint8_t[stubs_size_bits / 8 + 7];
-        SafeRead(disk_file, stubs_bin, stubs_size_bits / 8);
+        readData(stubs_bin, stubs_size_bits / 8)
 
         // Reads EPP deltas
         uint32_t max_deltas_size_bits = EntrySizes::CalculateMaxDeltasSize(k, table_index) * 8;
@@ -308,7 +548,7 @@ private:
 
         // Reads the size of the encoded deltas object
         uint16_t encoded_deltas_size = 0;
-        SafeRead(disk_file, (uint8_t*)&encoded_deltas_size, sizeof(uint16_t));
+        readData((uint8_t*)&encoded_deltas_size, sizeof(uint16_t))
 
         if (encoded_deltas_size * 8 > max_deltas_size_bits) {
             throw std::invalid_argument("Invalid size for deltas: " + std::to_string(encoded_deltas_size));
@@ -320,10 +560,10 @@ private:
             // Uncompressed
             encoded_deltas_size &= 0x7fff;
             deltas.resize(encoded_deltas_size);
-            SafeRead(disk_file, deltas.data(), encoded_deltas_size);
+            readData(deltas.data(), encoded_deltas_size)
         } else {
             // Compressed
-            SafeRead(disk_file, deltas_bin, encoded_deltas_size);
+            readData(deltas_bin, encoded_deltas_size)
 
             // Decodes the deltas
             double R = kRValues[table_index - 1];
@@ -402,6 +642,8 @@ private:
     // Returns P7 table entries (which are positions into table P6), for a given challenge
     std::vector<uint64_t> GetP7Entries(std::ifstream& disk_file, const uint8_t* challenge)
     {
+        uint64_t seekPosition = 0;
+        
         if (C2.empty()) {
             return std::vector<uint64_t>();
         }
@@ -438,14 +680,14 @@ private:
         uint32_t c1_entry_size = Util::ByteAlign(k) / 8;
 
         auto* c1_entry_bytes = new uint8_t[c1_entry_size];
-        SafeSeek(disk_file, table_begin_pointers[8] + c1_index * Util::ByteAlign(k) / 8);
+        seekData(table_begin_pointers[8] + c1_index * Util::ByteAlign(k) / 8)
 
         uint64_t curr_f7 = c2_entry_f;
         uint64_t prev_f7 = c2_entry_f;
         broke = false;
         // Goes through C2 entries until we find the correct C1 checkpoint.
         for (uint64_t start = 0; start < kCheckpoint1Interval; start++) {
-            SafeRead(disk_file, c1_entry_bytes, c1_entry_size);
+            readData(c1_entry_bytes, c1_entry_size)
             Bits c1_entry = Bits(c1_entry_bytes, Util::ByteAlign(k) / 8, Util::ByteAlign(k));
             uint64_t read_f7 = c1_entry.Slice(0, k).GetValue();
 
@@ -486,24 +728,24 @@ private:
         if (double_entry) {
             // In this case, we read the previous park as well as the current one
             c1_index -= 1;
-            SafeSeek(disk_file, table_begin_pointers[8] + c1_index * Util::ByteAlign(k) / 8);
-            SafeRead(disk_file, c1_entry_bytes, Util::ByteAlign(k) / 8);
+            seekData(table_begin_pointers[8] + c1_index * Util::ByteAlign(k) / 8)
+            readData(c1_entry_bytes, Util::ByteAlign(k) / 8)
             Bits c1_entry_bits = Bits(c1_entry_bytes, Util::ByteAlign(k) / 8, Util::ByteAlign(k));
             next_f7 = curr_f7;
             curr_f7 = c1_entry_bits.Slice(0, k).GetValue();
 
-            SafeSeek(disk_file, table_begin_pointers[10] + c1_index * c3_entry_size);
+            seekData(table_begin_pointers[10] + c1_index * c3_entry_size)
 
-            SafeRead(disk_file, encoded_size_buf, 2);
+            readData(encoded_size_buf, 2)
             encoded_size = Bits(encoded_size_buf, 2, 16).GetValue();
-            SafeRead(disk_file, bit_mask, c3_entry_size - 2);
+            readData(bit_mask, c3_entry_size - 2)
 
             p7_positions =
                 GetP7Positions(curr_f7, f7, curr_p7_pos, bit_mask, encoded_size, c1_index);
 
-            SafeRead(disk_file, encoded_size_buf, 2);
+            readData(encoded_size_buf, 2)
             encoded_size = Bits(encoded_size_buf, 2, 16).GetValue();
-            SafeRead(disk_file, bit_mask, c3_entry_size - 2);
+            readData(bit_mask, c3_entry_size - 2)
 
             c1_index++;
             curr_p7_pos = c1_index * kCheckpoint1Interval;
@@ -513,10 +755,10 @@ private:
                 p7_positions.end(), second_positions.begin(), second_positions.end());
 
         } else {
-            SafeSeek(disk_file, table_begin_pointers[10] + c1_index * c3_entry_size);
-            SafeRead(disk_file, encoded_size_buf, 2);
+            seekData(table_begin_pointers[10] + c1_index * c3_entry_size)
+            readData(encoded_size_buf, 2)
             encoded_size = Bits(encoded_size_buf, 2, 16).GetValue();
-            SafeRead(disk_file, bit_mask, c3_entry_size - 2);
+            readData(bit_mask, c3_entry_size - 2)
 
             p7_positions =
                 GetP7Positions(curr_f7, f7, curr_p7_pos, bit_mask, encoded_size, c1_index);
@@ -538,14 +780,14 @@ private:
         // P7.
         auto* p7_park_buf = new uint8_t[p7_park_size_bytes];
         uint64_t park_index = (p7_positions[0] == 0 ? 0 : p7_positions[0]) / kEntriesPerPark;
-        SafeSeek(disk_file, table_begin_pointers[7] + park_index * p7_park_size_bytes);
-        SafeRead(disk_file, p7_park_buf, p7_park_size_bytes);
+        seekData(table_begin_pointers[7] + park_index * p7_park_size_bytes)
+        readData(p7_park_buf, p7_park_size_bytes)
         ParkBits p7_park = ParkBits(p7_park_buf, p7_park_size_bytes, p7_park_size_bytes * 8);
         for (uint64_t i = 0; i < p7_positions[p7_positions.size() - 1] - p7_positions[0] + 1; i++) {
             uint64_t new_park_index = (p7_positions[i]) / kEntriesPerPark;
             if (new_park_index > park_index) {
-                SafeSeek(disk_file, table_begin_pointers[7] + new_park_index * p7_park_size_bytes);
-                SafeRead(disk_file, p7_park_buf, p7_park_size_bytes);
+                seekData(table_begin_pointers[7] + new_park_index * p7_park_size_bytes)
+                readData(p7_park_buf, p7_park_size_bytes)
                 p7_park = ParkBits(p7_park_buf, p7_park_size_bytes, p7_park_size_bytes * 8);
             }
             uint32_t start_bit_index = (p7_positions[i] % kEntriesPerPark) * (k + 1);
@@ -647,7 +889,12 @@ private:
         if (!disk_file) {
             // No disk file passed in, so we assume here we are doing parallel reads
             // Create individual file handles to allow parallel processing
-            std::ifstream disk_file_parallel(filename, std::ios::in | std::ios::binary);
+
+            std::ifstream disk_file_parallel;
+            if (!(this->isRemote)){
+                disk_file_parallel = std::ifstream(filename, std::ios::in | std::ios::binary);
+            }
+            
             line_point = ReadLinePoint(disk_file_parallel, depth, position);
         } else {
             line_point = ReadLinePoint(*disk_file, depth, position);
