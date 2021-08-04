@@ -6,6 +6,7 @@ HellmanAttacks
 **/*.dat
 **/*.dat.tmp
 .vscode
+*.code-workspace
 .venv/
 **/__pycache__
 src/python/.aes*
@@ -25,3 +26,4 @@ build
 .mypy_cache
 *.whl
 venv
+.eggs

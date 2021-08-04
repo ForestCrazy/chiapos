@@ -18,6 +18,8 @@
 #ifndef SRC_CPP_PROVER_DISK_HPP_
 #define SRC_CPP_PROVER_DISK_HPP_
 
+#define SPLIT_FILE_BLOCK_SIZE 491520
+
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -83,6 +85,13 @@ public:
 
     }
 
+    ~LocalCache(){
+        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
+            delete[] (this->items[i].data);
+            this->items.erase(this->items.begin() + i);
+        }
+    }
+
     bool getRange(uint64_t firstByte, uint64_t lastByte, uint8_t* target){
         for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
             uint64_t itemStart = this->items[i].start;
@@ -118,7 +127,7 @@ public:
         }
     }
 
-    void addItem(uint8_t* data, uint64_t size, uint64_t firstByte){
+    void addItem(uint8_t* data, uint64_t firstByte, uint64_t size){
         std::cout << "adding item to cache, range: " << firstByte << " " << firstByte + size - 1 << std::endl;
         auto timePoint = std::chrono::system_clock::now().time_since_epoch();
         long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
@@ -265,6 +274,7 @@ public:
             Encoding::ANSFree(kRValues[i]);
         }
         Encoding::ANSFree(kC3R);
+        std::cout << "\nDiskProver destroyed\n";
     }
 
     void GetMemo(uint8_t* buffer) { memcpy(buffer, memo, this->memo_size); }
@@ -418,11 +428,10 @@ private:
         }
     }
 
-    // would do void instead of uint64_t, but MSVC seems to not like this...
-    uint64_t ReadRemote(uint8_t* target, uint64_t seekPosition, uint64_t size){
-        if (this->cache.getRange(seekPosition, seekPosition + size - 1, target)){
+    void ExecuteRequest(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
+        if (this->cache.getRange(firstByte, lastByte, target)){
             //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
-            return size;
+            return;
         }
 
         CURL* curl = curl_easy_init();
@@ -430,24 +439,32 @@ private:
             throw std::runtime_error("failed to initialize curl object");
         }
 
-        curl_easy_setopt(curl, CURLOPT_URL, this->baseURL.c_str());
+        std::string usedURL = std::string(baseURL.c_str());
+
+        size_t replacePos = usedURL.find("{BLOCK}");
+        if (replacePos != std::string::npos){
+            usedURL.replace(replacePos, 7, std::to_string((firstByte / SPLIT_FILE_BLOCK_SIZE) + 1));
+        }
+        
+
+        curl_easy_setopt(curl, CURLOPT_URL, usedURL.c_str());
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
         //curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.74.0");
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
         curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
 
 
-        char rangeHeader[80];
-        uint64_t finalReadPosition = size < 16384 ? seekPosition + 16384 - 1 : seekPosition + size - 1;
-        //uint64_t finalReadPosition = seekPosition + size - 1;
-        sprintf(rangeHeader, "range: bytes=%llu-%llu", seekPosition, finalReadPosition);
+        //char rangeHeader[80];
+        //uint64_t finalReadPosition = size < 16384 ? firstByte + 16384 - 1 : firstByte + size - 1;
+        //uint64_t finalReadPosition = firstByte + size - 1;
+        //sprintf(rangeHeader, "range: bytes=%llu-%llu", 0, finalReadPosition);
         
 
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "accept: */*");
         headers = curl_slist_append(headers, "accept-encoding: identity");
         headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
-        headers = curl_slist_append(headers, rangeHeader);
+        //headers = curl_slist_append(headers, rangeHeader);
         headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
         headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
         headers = curl_slist_append(headers, "sec-fetch-dest: empty");
@@ -459,6 +476,7 @@ private:
 
         std::string response_string;
         std::string header_string;
+        response_string.reserve(SPLIT_FILE_BLOCK_SIZE);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
@@ -466,8 +484,8 @@ private:
         long response_code;
         
 
-        std::cout << std::endl << "Performing request, filename " << this->baseURL << std::endl;
-        std::cout << "Range: " << seekPosition << " - " << finalReadPosition << std::endl;
+        std::cout << std::endl << "Performing request, filename " << usedURL << std::endl;
+        std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
 
         auto timePoint = std::chrono::system_clock::now().time_since_epoch();
         long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
@@ -481,7 +499,7 @@ private:
         timePoint = std::chrono::system_clock::now().time_since_epoch();
         long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
-        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << size << " requested originally)" << std::endl;
+        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
 
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
@@ -495,11 +513,32 @@ private:
             throw std::runtime_error("CURL failed");
         }
 
-        
-        memcpy(target, response_string.data(), size);
-        this->cache.addItem((uint8_t*)((void*)(response_string.c_str())), finalReadPosition - seekPosition + 1, seekPosition);
+        if (response_code - response_code % 100 != 200){
+            throw std::runtime_error("Request failed: " + std::to_string(response_code));
+        }
 
-        return size;
+        
+        memcpy(target, response_string.data() + firstByte % SPLIT_FILE_BLOCK_SIZE, lastByte - firstByte + 1);
+        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte - firstByte % SPLIT_FILE_BLOCK_SIZE, response_string.size());
+    }
+
+    void ReadRemote(uint8_t* target, uint64_t seekPosition, uint64_t size){
+        uint64_t firstBlock = seekPosition / SPLIT_FILE_BLOCK_SIZE;
+        uint64_t lastBlock = (seekPosition + size - 1) / SPLIT_FILE_BLOCK_SIZE;
+
+        uint64_t firstByte = seekPosition;
+        uint64_t lastByte = seekPosition + size - 1;
+
+        for (uint64_t block = firstBlock; block <= lastBlock; block++){
+            uint64_t blockFirstByte = block * SPLIT_FILE_BLOCK_SIZE;
+            uint64_t blockLastByte = (block + 1) * SPLIT_FILE_BLOCK_SIZE - 1;
+
+            ExecuteRequest(
+                std::max(target + (blockFirstByte - seekPosition), target),
+                std::max(blockFirstByte, seekPosition),
+                std::min(blockLastByte, lastByte)
+                );
+        }
     }
 
     void SafeRead(std::ifstream& disk_file, uint8_t* target, uint64_t size) {
