@@ -1,7 +1,7 @@
 # chia-blockchain remote farming (INDEV)
 
 This client fork (no changes to the protocol, runs on Chia mainnet) allows a farmer to store their plots in a remote location accessible via HTTP(S).
-Intended use case is when one has a (preferably) free, unused cloud storage subscription and want to use it to farm some XCH instead of leaving it empty.
+Intended use case is when one has a (preferably) free, unused cloud storage subscription and wants to use it to farm some XCH instead of leaving it empty.
 You will also need the modded Python client: [Chia Blockchain](https://github.com/GLise710/chia-blockchain)
 
 
