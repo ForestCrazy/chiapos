@@ -151,6 +151,47 @@ private:
     std::vector<cache_item> items = std::vector<cache_item>();
 };
 
+
+std::vector<std::string> splitString(std::string& string, std::string& sequence){
+    std::vector<std::string> result;
+    
+    size_t previousPosition = 0;
+    size_t newPosition = 0;
+
+    while (true){
+        newPosition = string.find(sequence, previousPosition);
+
+        if (newPosition == std::string::npos){
+            result.push_back(
+                string.substr(previousPosition, string.size() - previousPosition)
+            );
+            break;
+        }
+
+        result.push_back(
+            string.substr(previousPosition, newPosition - previousPosition)
+        );
+
+        previousPosition = newPosition + 7;
+    }
+
+    return result;
+}
+
+
+std::string joinString(std::vector<std::string> stringArray, std::string& sequence){
+    std::string result;
+
+    for (size_t i = 0; i < stringArray.size() - 1; i++){
+        result.append(stringArray[i]);
+        result.append(sequence);
+    }
+    result.append(stringArray.back());
+
+    return result;
+}
+
+
 // The DiskProver, given a correctly formatted plot file, can efficiently generate valid proofs
 // of space, for a given challenge.
 class DiskProver {
@@ -194,6 +235,8 @@ public:
             this->baseURL = std::string(buffer);
 
             std::cout << "Read baseURL: " << this->baseURL << std::endl;
+
+            this->templateURL = splitString(baseURL, std::string("{BLOCK}"));
         }
 
 
@@ -410,6 +453,7 @@ private:
 
     bool isRemote;
     std::string baseURL;
+    std::vector<std::string> templateURL;
     LocalCache cache;
 
     // Using this method instead of simply seeking will prevent segfaults that would arise when
@@ -439,15 +483,11 @@ private:
             throw std::runtime_error("failed to initialize curl object");
         }
 
-        std::string usedURL = std::string(baseURL.c_str());
-
-        size_t replacePos = usedURL.find("{BLOCK}");
-        if (replacePos != std::string::npos){
-            usedURL.replace(replacePos, 7, std::to_string((firstByte / SPLIT_FILE_BLOCK_SIZE) + 1));
-        }
+        std::string blockNumberString = std::to_string((firstByte / SPLIT_FILE_BLOCK_SIZE) + 1);
+        std::string URL = joinString(this->templateURL, blockNumberString);
         
 
-        curl_easy_setopt(curl, CURLOPT_URL, usedURL.c_str());
+        curl_easy_setopt(curl, CURLOPT_URL, URL.c_str());
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
         //curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.74.0");
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
@@ -484,7 +524,7 @@ private:
         long response_code;
         
 
-        std::cout << std::endl << "Performing request, filename " << usedURL << std::endl;
+        std::cout << std::endl << "Performing request, filename " << URL << std::endl;
         std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
 
         auto timePoint = std::chrono::system_clock::now().time_since_epoch();
