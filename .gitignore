@@ -21,6 +21,7 @@ Makefile
 **/*.rendered.*.cpp
 **/*.cppimporthash
 build
+build-msvc
 .pytest_cache
 **/*.egg-info
 .mypy_cache
