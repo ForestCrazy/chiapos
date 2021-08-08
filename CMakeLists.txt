@@ -51,8 +51,6 @@ set(FSE_FILES
 
 include_directories(
   ${INCLUDE_DIRECTORIES}
-  # YOU NEED TO INCLUDE YOUR cURL PATH HERE INSTEAD OF THIS ONE
-  C:/Users/matej/Documents/GitHub/vcpkg/installed/x64-windows/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../lib/include
   ${cxxopts_SOURCE_DIR}/include
   ${gulrak_SOURCE_DIR}/include/ghc
@@ -60,6 +58,12 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/test
   )
+
+
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib)
+find_package(CURL REQUIRED)
+
+message(STATUS "CURL version ${CURL_VERSION_STRING} ${CURL_LIBRARIES}")
 
 add_library(fse ${FSE_FILES})
 
@@ -161,25 +165,25 @@ target_compile_features(chiapos PUBLIC cxx_std_17)
 target_compile_features(RunTests PUBLIC cxx_std_17)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-  target_link_libraries(chiapos PRIVATE fse Threads::Threads)
-  target_link_libraries(ProofOfSpace fse Threads::Threads)
-  target_link_libraries(RunTests fse Threads::Threads)
+  target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} Threads::Threads)
+  target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} Threads::Threads)
+  target_link_libraries(RunTests fse ${CURL_LIBRARIES} Threads::Threads)
 elseif (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
-  target_link_libraries(chiapos PRIVATE fse Threads::Threads)
-  target_link_libraries(ProofOfSpace fse Threads::Threads)
-  target_link_libraries(RunTests fse Threads::Threads)
+  target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} Threads::Threads)
+  target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} Threads::Threads)
+  target_link_libraries(RunTests fse ${CURL_LIBRARIES} Threads::Threads)
 elseif (${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
-  target_link_libraries(chiapos PRIVATE fse Threads::Threads)
-  target_link_libraries(ProofOfSpace fse Threads::Threads)
-  target_link_libraries(RunTests fse Threads::Threads)
+  target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} Threads::Threads)
+  target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} Threads::Threads)
+  target_link_libraries(RunTests fse ${CURL_LIBRARIES} Threads::Threads)
 elseif (MSVC)
-  target_link_libraries(chiapos PRIVATE fse Threads::Threads uint128)
-  target_link_libraries(ProofOfSpace fse Threads::Threads uint128)
-  target_link_libraries(RunTests fse Threads::Threads uint128)
+  target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} Threads::Threads uint128)
+  target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} Threads::Threads uint128)
+  target_link_libraries(RunTests fse ${CURL_LIBRARIES} Threads::Threads uint128)
 else()
-  target_link_libraries(chiapos PRIVATE fse stdc++fs Threads::Threads)
-  target_link_libraries(ProofOfSpace fse stdc++fs Threads::Threads)
-  target_link_libraries(RunTests fse stdc++fs Threads::Threads)
+  target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
+  target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
+  target_link_libraries(RunTests fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
 endif()
 
 enable_testing()
