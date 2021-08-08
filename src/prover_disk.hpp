@@ -40,7 +40,7 @@
 #include "entry_sizes.hpp"
 #include "util.hpp"
 
-#include <curl/curl.h>
+#include "../lib/include/curl/curl.h"
 
 #define readData(destination, size)                     \
         if (this->isRemote){                            \
@@ -56,6 +56,10 @@
         } else {                            \
             SafeSeek(disk_file, position);  \
         }
+
+
+const std::string blockKeyword("{BLOCK}");
+
 
 size_t writeResponseChunk(void* ptr, size_t size, size_t nmemb, std::string* data) {
 	//std::cout << *data << std::endl;
@@ -152,7 +156,7 @@ private:
 };
 
 
-std::vector<std::string> splitString(std::string& string, std::string& sequence){
+std::vector<std::string> splitString(const std::string& string, const std::string& sequence){
     std::vector<std::string> result;
     
     size_t previousPosition = 0;
@@ -218,6 +222,8 @@ public:
             this->filename = filename;
             this->cache = LocalCache();
 
+            // yes, I copypasted this part
+
             // get pointer to associated buffer object
             std::filebuf* pbuf = disk_file.rdbuf();
 
@@ -236,7 +242,7 @@ public:
 
             std::cout << "Read baseURL: " << this->baseURL << std::endl;
 
-            this->templateURL = splitString(baseURL, std::string("{BLOCK}"));
+            this->templateURL = splitString(baseURL, blockKeyword);
         }
 
 
@@ -566,7 +572,6 @@ private:
         uint64_t firstBlock = seekPosition / SPLIT_FILE_BLOCK_SIZE;
         uint64_t lastBlock = (seekPosition + size - 1) / SPLIT_FILE_BLOCK_SIZE;
 
-        uint64_t firstByte = seekPosition;
         uint64_t lastByte = seekPosition + size - 1;
 
         for (uint64_t block = firstBlock; block <= lastBlock; block++){
