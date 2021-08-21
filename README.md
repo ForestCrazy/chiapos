@@ -33,14 +33,15 @@ The issue with OneDrive is described in range mode above, this means that we nee
 In the end, you will access your parts by their name (get the URL for 1 file by downloading it, copy it), replace the file number in the file name with '{BLOCK}', without quotes. This will make the harvester replace the {BLOCK} keyword with the part number it needs. Parts are counted from 1, not 0, cause it was originally made to work with GSplit3 as splitter.
 
 ### Example OneDrive configuration
-```onedrive
+```
+onedrive
 491520
 50000
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2F**folder0**%5Fchia%5F00mes8r9f5p4ok86%2F**{BLOCK}**%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2F**folder1**%5Fchia%5F00mes8r9f5p4ok86%2F**{BLOCK}**%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2F**folder2**%5Fchia%5F00mes8r9f5p4ok86%2F**{BLOCK}**%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2F**folder3**%5Fchia%5F00mes8r9f5p4ok86%2F**{BLOCK}**%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2F**folder4**%5Fchia%5F00mes8r9f5p4ok86%2F**{BLOCK}**%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder0%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder1%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder2%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder3%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder4%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
 ```
 
 # Build instructions
