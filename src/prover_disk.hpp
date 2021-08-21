@@ -18,8 +18,6 @@
 #ifndef SRC_CPP_PROVER_DISK_HPP_
 #define SRC_CPP_PROVER_DISK_HPP_
 
-#define SPLIT_FILE_BLOCK_SIZE 491520
-
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -31,6 +29,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -40,7 +39,11 @@
 #include "entry_sizes.hpp"
 #include "util.hpp"
 
+#ifdef _WIN32
+#include <curl/curl.h>
+#else
 #include "../lib/include/curl/curl.h"
+#endif
 
 #define readData(destination, size)                     \
         if (this->isRemote){                            \
@@ -59,6 +62,11 @@
 
 
 const std::string blockKeyword("{BLOCK}");
+
+enum remoteMode : uint64_t {
+    range,
+    onedrive
+};
 
 
 size_t writeResponseChunk(void* ptr, size_t size, size_t nmemb, std::string* data) {
@@ -90,9 +98,10 @@ public:
     }
 
     ~LocalCache(){
-        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
-            delete[] (this->items[i].data);
-            this->items.erase(this->items.begin() + i);
+        try {
+            this->flush();
+        } catch (std::system_error& error){
+            std::cout << "Mutex error at LocalCache destruction: " << error.what() << std::endl;
         }
     }
 
@@ -101,21 +110,18 @@ public:
             uint64_t itemStart = this->items[i].start;
             uint64_t itemEnd = this->items[i].end;
             if (itemStart <= firstByte && itemEnd >= lastByte){
-                //std::cout << "starting mempcy from cache first " << firstByte << " last " << lastByte << std::endl;
                 memcpy(target, this->items[i].data + (firstByte - itemStart), lastByte - firstByte + 1);
-                
+
 
                 auto timePoint = std::chrono::system_clock::now().time_since_epoch();
                 long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
                 this->items[i].accessed = now;
-                
-                
-                this->cleanUp();
+
+
                 return true;
             }
         }
-        //std::cout << "getRange after loop\n";
-        this->cleanUp();
+        
         return false;
     }
 
@@ -123,12 +129,46 @@ public:
         auto timePoint = std::chrono::system_clock::now().time_since_epoch();
         long long deletionPoint = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count() - 5 * 60 * 1000;
 
+        this->lock.lock();
+
         for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
             if (this->items[i].accessed < deletionPoint){
                 delete[] (this->items[i].data);
                 this->items.erase(this->items.begin() + i);
             }
         }
+
+        this->lock.unlock();
+    }
+
+    void flush(){
+        std::thread(&LocalCache::flushCacheThread, this).detach();
+    }
+
+    void flushNow(){
+        this->lock.lock();
+    
+        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
+            delete[] (this->items[i].data);
+            this->items.erase(this->items.begin() + i);
+        }
+
+        this->lock.unlock();
+    }
+
+    void flushCacheThread(){
+        // by that time the proofs are already invalid, even if we got a golden plot
+        // of 5+ partials in 1 block, they already fell invalid, so the slowdown makes no difference
+        std::this_thread::sleep_for(std::chrono::seconds(45));
+        
+        this->lock.lock();
+        
+        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
+            delete[] (this->items[i].data);
+            this->items.erase(this->items.begin() + i);
+        }
+
+        this->lock.unlock();
     }
 
     void addItem(uint8_t* data, uint64_t firstByte, uint64_t size){
@@ -142,18 +182,24 @@ public:
         }
 
         memcpy(itemData, data, size);
-        
+
+        this->lock.lock();
+
         this->items.push_back({
             itemData,
             firstByte,
             firstByte + size - 1,
             now
         });
+
+        this->lock.unlock();
     }
 
-private:
-    std::vector<cache_item> items = std::vector<cache_item>();
+    std::mutex lock;
+    std::vector<cache_item> items = std::vector<cache_item>(); 
 };
+
+
 
 
 std::vector<std::string> splitString(const std::string& string, const std::string& sequence){
@@ -176,7 +222,7 @@ std::vector<std::string> splitString(const std::string& string, const std::strin
             string.substr(previousPosition, newPosition - previousPosition)
         );
 
-        previousPosition = newPosition + 7;
+        previousPosition = newPosition + sequence.size();
     }
 
     return result;
@@ -220,7 +266,6 @@ public:
         if (filename.find(std::string("--remoteplot--")) != std::string::npos){
             this->isRemote = true;
             this->filename = filename;
-            this->cache = LocalCache();
 
             // yes, I copypasted this part
 
@@ -238,14 +283,58 @@ public:
             // get file data
             pbuf->sgetn(buffer, size);
 
-            this->baseURL = std::string(buffer);
+            std::string configString = std::string(buffer);
+            std::vector<std::string> config;
+            if (configString.find("\r\n") != std::string::npos){
+                config = splitString(configString, std::string("\r\n"));
+            } else {
+                config = splitString(configString, std::string("\n"));
+            }
 
-            std::cout << "Read baseURL: " << this->baseURL << std::endl;
+            std::cout << "Mode: " << config[0] << std::endl;
 
-            this->templateURL = splitString(baseURL, blockKeyword);
+            if (config[0] == std::string("range")){
+                // range
+                // URL
+                this->mode = remoteMode::range;
+                this->baseURL.push_back(config[1]);
+                this->isSplit = false;
+            } else if (config[0] == "onedrive"){
+                // onedrive
+                // uint64_t splitFileSize - how big in bytes is one split file
+                // uint64_t filesPerURL - how many files does a URL (folder) hold since 50000 is the limit for sharing in one folder on OneDrive
+                // semicolon separated URLs, probably containing {BLOCK} keyword
+                this->mode = remoteMode::onedrive;
+
+                this->splitFileSize = std::stoull(config[1]);
+                this->filesPerURL = std::stoull(config[2]);
+
+                std::cout << this->baseURL.size() << std::endl;
+
+                for (size_t i = 3; i < config.size(); i++){
+                    this->baseURL.push_back(config[i]);
+                    this->templateURL.push_back(splitString(config[i], blockKeyword));
+                    std::cout << config[i] << std::endl;
+                }
+
+                for (size_t i = 0; i < baseURL.size(); i++){
+                    std::cout << this->baseURL[i] << std::endl;
+                }
+
+                this->isSplit = true;
+            } else {
+                throw std::runtime_error(std::string("Unknown mode: ") + config[0]);
+            }
+
+
+            std::cout << "Read " << this->baseURL.size() << " baseURL(s)" << std::endl;
+        } else {
+            this->isRemote = false;
+            this->filename = filename;
         }
 
-
+        std::cout << "Is remote: " << this->isRemote << std::endl;
+        std::cout << "Is split: " << this->isSplit << std::endl;
 
         
         // 19 bytes  - "Proof of Space Plot" (utf-8)
@@ -313,6 +402,10 @@ public:
         }
 
         delete[] c2_buf;
+
+        if (this->isRemote){
+            this->cache.flush();
+        }
     }
 
     ~DiskProver()
@@ -323,7 +416,7 @@ public:
             Encoding::ANSFree(kRValues[i]);
         }
         Encoding::ANSFree(kC3R);
-        std::cout << "\nDiskProver destroyed\n";
+        std::cout << "DiskProver destroyed\n";
     }
 
     void GetMemo(uint8_t* buffer) { memcpy(buffer, memo, this->memo_size); }
@@ -399,6 +492,10 @@ public:
                 qualities.emplace_back(hash.data(), 32, 256);
             }
         }  // Scope for disk_file
+
+        if (this->isRemote){
+            this->cache.flush();
+        }
         return qualities;
     }
 
@@ -444,6 +541,10 @@ public:
                 full_proof += x;
             }
         }  // Scope for disk_file
+
+        if (this->isRemote){
+            this->cache.flush();
+        }
         return full_proof;
     }
 
@@ -458,8 +559,12 @@ private:
     std::vector<uint64_t> C2;
 
     bool isRemote;
-    std::string baseURL;
-    std::vector<std::string> templateURL;
+    uint64_t mode;
+    bool isSplit;
+    uint64_t splitFileSize;
+    uint64_t filesPerURL;
+    std::vector<std::string> baseURL;
+    std::vector<std::vector<std::string>> templateURL;
     LocalCache cache;
 
     // Using this method instead of simply seeking will prevent segfaults that would arise when
@@ -478,7 +583,7 @@ private:
         }
     }
 
-    void ExecuteRequest(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
+    void ExecuteRequestSplit(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
         if (this->cache.getRange(firstByte, lastByte, target)){
             //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
             return;
@@ -489,28 +594,22 @@ private:
             throw std::runtime_error("failed to initialize curl object");
         }
 
-        std::string blockNumberString = std::to_string((firstByte / SPLIT_FILE_BLOCK_SIZE) + 1);
-        std::string URL = joinString(this->templateURL, blockNumberString);
+        uint64_t blockNumberZeroIndex = firstByte / this->splitFileSize;
+
+        std::string blockNumberString = std::to_string(blockNumberZeroIndex + 1);
+        std::string URL = joinString(this->templateURL[blockNumberZeroIndex / this->filesPerURL], blockNumberString);
         
 
         curl_easy_setopt(curl, CURLOPT_URL, URL.c_str());
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-        //curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.74.0");
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
         curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-
-
-        //char rangeHeader[80];
-        //uint64_t finalReadPosition = size < 16384 ? firstByte + 16384 - 1 : firstByte + size - 1;
-        //uint64_t finalReadPosition = firstByte + size - 1;
-        //sprintf(rangeHeader, "range: bytes=%llu-%llu", 0, finalReadPosition);
         
 
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "accept: */*");
         headers = curl_slist_append(headers, "accept-encoding: identity");
         headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
-        //headers = curl_slist_append(headers, rangeHeader);
         headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
         headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
         headers = curl_slist_append(headers, "sec-fetch-dest: empty");
@@ -518,11 +617,14 @@ private:
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
         headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
         // you may need to enter cookie credentials here
+        //headers = curl_slist_append(headers, "cookie: farming=chia");
+
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
         std::string response_string;
         std::string header_string;
-        response_string.reserve(SPLIT_FILE_BLOCK_SIZE);
+        response_string.reserve(this->splitFileSize);
+
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
@@ -530,7 +632,7 @@ private:
         long response_code;
         
 
-        std::cout << std::endl << "Performing request, filename " << URL << std::endl;
+        std::cout << std::endl << "Performing split request, filename " << URL << std::endl;
         std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
 
         auto timePoint = std::chrono::system_clock::now().time_since_epoch();
@@ -552,8 +654,6 @@ private:
         curl = NULL;
 
         std::cout << "Request finished, response code: " << response_code << std::endl;
-        //std::cout << header_string << std::endl;
-        //std::cout << response_string << std::endl;
 
         if (result != 0){
             throw std::runtime_error("CURL failed");
@@ -564,25 +664,116 @@ private:
         }
 
         
-        memcpy(target, response_string.data() + firstByte % SPLIT_FILE_BLOCK_SIZE, lastByte - firstByte + 1);
-        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte - firstByte % SPLIT_FILE_BLOCK_SIZE, response_string.size());
+        memcpy(target, response_string.data() + firstByte % this->splitFileSize, lastByte - firstByte + 1);
+        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte - firstByte % this->splitFileSize, response_string.size());
     }
 
+
+
+    void ExecuteRequestWhole(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
+        uint64_t size = lastByte - firstByte + 1;
+        
+        if (this->cache.getRange(firstByte, lastByte, target)){
+            //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
+            return;
+        }
+
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            throw std::runtime_error("failed to initialize curl object");
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, this->baseURL[0].c_str());
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+        //curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.74.0");
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+
+
+        char rangeHeader[80];
+        sprintf(rangeHeader, "range: bytes=%llu-%llu", firstByte, size < 4096 ? firstByte + 4095 : lastByte);
+
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, "accept: */*");
+        headers = curl_slist_append(headers, "accept-encoding: identity");
+        headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
+        headers = curl_slist_append(headers, rangeHeader);
+        headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
+        headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
+        headers = curl_slist_append(headers, "sec-fetch-dest: empty");
+        headers = curl_slist_append(headers, "sec-fetch-mode: cors");
+        headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
+        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
+        // you may need to enter cookie credentials here
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        std::string response_string;
+        std::string header_string;
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
+
+        long response_code;
+
+
+        std::cout << std::endl << "Performing request, filename " << this->baseURL[0] << std::endl;
+        std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
+
+        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+
+        CURLcode result = curl_easy_perform(curl);
+
+        std::cout << "Curl code: " << result << std::endl;
+
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
+        timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+
+        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
+
+        curl_easy_cleanup(curl);
+        curl_slist_free_all(headers);
+        curl = NULL;
+
+        std::cout << "Request finished, response code: " << response_code << std::endl;
+        //std::cout << header_string << std::endl;
+        //std::cout << response_string << std::endl;
+
+        if (result != 0){
+            throw std::runtime_error("CURL failed");
+        }
+
+
+        memcpy(target, response_string.data(), lastByte - firstByte + 1);
+        this->cache.addItem((uint8_t*)((void*)(response_string.data())), firstByte, response_string.size());
+    }
+
+
     void ReadRemote(uint8_t* target, uint64_t seekPosition, uint64_t size){
-        uint64_t firstBlock = seekPosition / SPLIT_FILE_BLOCK_SIZE;
-        uint64_t lastBlock = (seekPosition + size - 1) / SPLIT_FILE_BLOCK_SIZE;
+        switch (this->mode){
+            case remoteMode::range:
+                ExecuteRequestWhole(target, seekPosition, seekPosition + size - 1);
+                break;
+            
+            case remoteMode::onedrive:
+                uint64_t firstBlock = seekPosition / this->splitFileSize;
+                uint64_t lastBlock = (seekPosition + size - 1) / this->splitFileSize;
 
-        uint64_t lastByte = seekPosition + size - 1;
+                uint64_t lastByte = seekPosition + size - 1;
 
-        for (uint64_t block = firstBlock; block <= lastBlock; block++){
-            uint64_t blockFirstByte = block * SPLIT_FILE_BLOCK_SIZE;
-            uint64_t blockLastByte = (block + 1) * SPLIT_FILE_BLOCK_SIZE - 1;
+                for (uint64_t block = firstBlock; block <= lastBlock; block++){
+                    uint64_t blockFirstByte = block * this->splitFileSize;
+                    uint64_t blockLastByte = (block + 1) * this->splitFileSize - 1;
 
-            ExecuteRequest(
-                std::max(target + (blockFirstByte - seekPosition), target),
-                std::max(blockFirstByte, seekPosition),
-                std::min(blockLastByte, lastByte)
-                );
+                    ExecuteRequestSplit(
+                        std::max(target + (blockFirstByte - seekPosition), target),
+                        std::max(blockFirstByte, seekPosition),
+                        std::min(blockLastByte, lastByte)
+                        );
+                }
+                break;
         }
     }
 

@@ -52,6 +52,7 @@ set(FSE_FILES
 include_directories(
   ${INCLUDE_DIRECTORIES}
   ${CMAKE_CURRENT_SOURCE_DIR}/../lib/include
+  #/path/to/./vcpkg/installed/x64-windows/include
   ${cxxopts_SOURCE_DIR}/include
   ${gulrak_SOURCE_DIR}/include/ghc
   ${CMAKE_CURRENT_SOURCE_DIR}/../lib/FiniteStateEntropy/lib
@@ -59,11 +60,12 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/test
   )
 
+if (NOT MSVC)
+  find_package(CURL REQUIRED)
+  message(STATUS "CURL version ${CURL_VERSION_STRING} ${CURL_LIBRARIES}")
+ENDIF()
 
-link_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib)
-find_package(CURL REQUIRED)
 
-message(STATUS "CURL version ${CURL_VERSION_STRING} ${CURL_LIBRARIES}")
 
 add_library(fse ${FSE_FILES})
 
@@ -177,9 +179,9 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
   target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} Threads::Threads)
   target_link_libraries(RunTests fse ${CURL_LIBRARIES} Threads::Threads)
 elseif (MSVC)
-  target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} Threads::Threads uint128)
-  target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} Threads::Threads uint128)
-  target_link_libraries(RunTests fse ${CURL_LIBRARIES} Threads::Threads uint128)
+  target_link_libraries(chiapos PRIVATE fse Threads::Threads uint128)
+  target_link_libraries(ProofOfSpace fse Threads::Threads uint128)
+  target_link_libraries(RunTests fse Threads::Threads uint128)
 else()
   target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
   target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
