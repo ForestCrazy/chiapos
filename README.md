@@ -37,11 +37,11 @@ In the end, you will access your parts by their name (get the URL for 1 file by 
 onedrive
 491520
 50000
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder0%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder1%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder2%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder3%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
-https://gymposke-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder4%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://chiacrypto-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder0%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://chiacrypto-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder1%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://chiacrypto-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder2%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://chiacrypto-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder3%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
+https://chiacrypto-my.sharepoint.com/personal/jack_the_farmer_chia_crypto/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fjack%5Fchia%5Fcrypto%2FDocuments%2Ffolder4%5Fchia%5F00mes8r9f5p4ok86%2F{BLOCK}%5Fplot%2Dk32%2D2021%2D08%2D05%2D17%2D49%2Dc51562c946522a44b09a3678d8d084a3a3c35d0d4184cd209fa72a305b9dbd58%2Eplot
 ```
 
 # Build instructions
