@@ -80,24 +80,17 @@ PYBIND11_MODULE(chiapos, m)
         .def(
             "get_memo",
             [](DiskProver &dp) {
-                uint8_t *memo = new uint8_t[dp.GetMemoSize()];
-                dp.GetMemo(memo);
-                py::bytes ret = py::bytes(reinterpret_cast<char *>(memo), dp.GetMemoSize());
-                delete[] memo;
-                return ret;
+                const std::vector<uint8_t>& memo = dp.GetMemo();
+                return py::bytes(reinterpret_cast<const char*>(memo.data()), memo.size());
             })
         .def(
             "get_id",
             [](DiskProver &dp) {
-                uint8_t *id = new uint8_t[kIdLen];
-                dp.GetId(id);
-                py::bytes ret = py::bytes(reinterpret_cast<char *>(id), kIdLen);
-                delete[] id;
-                return ret;
+                const std::vector<uint8_t>& id = dp.GetId();
+                return py::bytes(reinterpret_cast<const char*>(id.data()), id.size());
             })
         .def("get_size", [](DiskProver &dp) { return dp.GetSize(); })
         .def("get_filename", [](DiskProver &dp) { return dp.GetFilename(); })
-        .def("get_remoteness", [](DiskProver &dp) {return dp.GetRemoteness();})
         .def(
             "get_qualities_for_challenge",
             [](DiskProver &dp, const py::bytes &challenge) {
@@ -132,7 +125,12 @@ PYBIND11_MODULE(chiapos, m)
                 reinterpret_cast<char *>(proof_buf), Util::ByteAlign(64 * dp.GetSize()) / 8);
             delete[] proof_buf;
             return ret;
-        },py::arg("challenge"), py::arg("index"), py::arg("parallel_read") = true);
+        },py::arg("challenge"), py::arg("index"), py::arg("parallel_read") = true)
+        .def(
+            "flush_cache",
+            [](DiskProver &dp) {
+                dp.FlushCache();
+            });
 
     py::class_<Verifier>(m, "Verifier")
         .def(py::init<>())

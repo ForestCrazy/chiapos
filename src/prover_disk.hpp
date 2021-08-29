@@ -65,7 +65,8 @@ const std::string blockKeyword("{BLOCK}");
 
 enum remoteMode : uint64_t {
     range,
-    onedrive
+    onedrive,
+    dropbox
 };
 
 
@@ -106,6 +107,7 @@ public:
     }
 
     bool getRange(uint64_t firstByte, uint64_t lastByte, uint8_t* target){
+        //std::cout << "getRange " << firstByte << "-" << lastByte << std::endl;
         for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
             uint64_t itemStart = this->items[i].start;
             uint64_t itemEnd = this->items[i].end;
@@ -117,11 +119,11 @@ public:
                 long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
                 this->items[i].accessed = now;
 
-
+                //std::cout << "getRange ended true" << std::endl;
                 return true;
             }
         }
-        
+        //std::cout << "getRange ended false" << std::endl;
         return false;
     }
 
@@ -142,10 +144,6 @@ public:
     }
 
     void flush(){
-        std::thread(&LocalCache::flushCacheThread, this).detach();
-    }
-
-    void flushNow(){
         this->lock.lock();
     
         for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
@@ -156,27 +154,13 @@ public:
         this->lock.unlock();
     }
 
-    void flushCacheThread(){
-        // by that time the proofs are already invalid, even if we got a golden plot
-        // of 5+ partials in 1 block, they already fell invalid, so the slowdown makes no difference
-        std::this_thread::sleep_for(std::chrono::seconds(45));
-        
-        this->lock.lock();
-        
-        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
-            delete[] (this->items[i].data);
-            this->items.erase(this->items.begin() + i);
-        }
-
-        this->lock.unlock();
-    }
-
     void addItem(uint8_t* data, uint64_t firstByte, uint64_t size){
-        std::cout << "adding item to cache, range: " << firstByte << " " << firstByte + size - 1 << std::endl;
+        //std::cout << "adding item to cache, range: " << firstByte << " " << firstByte + size - 1 << std::endl;
         auto timePoint = std::chrono::system_clock::now().time_since_epoch();
         long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
         
         uint8_t* itemData = new uint8_t[size];
+
         if (!itemData){
             throw std::runtime_error("Failed to allocate cache memory");
         }
@@ -248,9 +232,9 @@ class DiskProver {
 public:    
     // The constructor opens the file, and reads the contents of the file header. The table pointers
     // will be used to find and seek to all seven tables, at the time of proving.
-    explicit DiskProver(const std::string& filename)
+    explicit DiskProver(const std::string& filename) : id(kIdLen)
     {
-        std::cout << "DEBUG TEST " << (filename) << std::endl;
+        std::cout << "Loading plot: " << (filename) << std::endl;
         struct plot_header header{};
 
         std::ifstream disk_file;
@@ -277,6 +261,7 @@ public:
             pbuf->pubseekpos(0, disk_file.in);
 
             // allocate memory to contain file data
+            //std::cout << "line 282: " << size + 1 << std::endl;
             char* buffer = new char[size + 1];
             buffer[size] = '\0';
 
@@ -298,12 +283,11 @@ public:
                 // URL
                 this->mode = remoteMode::range;
                 this->baseURL.push_back(config[1]);
-                this->isSplit = false;
             } else if (config[0] == "onedrive"){
                 // onedrive
                 // uint64_t splitFileSize - how big in bytes is one split file
                 // uint64_t filesPerURL - how many files does a URL (folder) hold since 50000 is the limit for sharing in one folder on OneDrive
-                // semicolon separated URLs, probably containing {BLOCK} keyword
+                // newline separated URLs, probably containing {BLOCK} keyword
                 this->mode = remoteMode::onedrive;
 
                 this->splitFileSize = std::stoull(config[1]);
@@ -314,14 +298,18 @@ public:
                 for (size_t i = 3; i < config.size(); i++){
                     this->baseURL.push_back(config[i]);
                     this->templateURL.push_back(splitString(config[i], blockKeyword));
-                    std::cout << config[i] << std::endl;
                 }
+            } else if (config[0] == "dropbox"){
+                // dropbox
+                // uint64_t splitFileSize - how big in bytes is one split file
+                // newline separated URLs to each part
+                this->mode = remoteMode::dropbox;
 
-                for (size_t i = 0; i < baseURL.size(); i++){
-                    std::cout << this->baseURL[i] << std::endl;
+                this->splitFileSize = std::stoull(config[1]);
+
+                for (size_t i = 2; i < config.size(); i++){
+                    this->baseURL.push_back(config[i]);
                 }
-
-                this->isSplit = true;
             } else {
                 throw std::runtime_error(std::string("Unknown mode: ") + config[0]);
             }
@@ -334,7 +322,6 @@ public:
         }
 
         std::cout << "Is remote: " << this->isRemote << std::endl;
-        std::cout << "Is split: " << this->isSplit << std::endl;
 
         
         // 19 bytes  - "Proof of Space Plot" (utf-8)
@@ -361,7 +348,7 @@ public:
             throw std::invalid_argument("Invalid plot file format");
         }
 
-        memcpy(this->id, header.id, sizeof(header.id));
+        memcpy(id.data(), header.id, sizeof(header.id));
         this->k = header.k;
         
         seekData(offsetof(struct plot_header, fmt_desc) + fmt_desc_len)
@@ -369,9 +356,9 @@ public:
         uint8_t size_buf[2];
         readData(size_buf, 2)
 
-        this->memo_size = Util::TwoBytesToInt(size_buf);
-        this->memo = new uint8_t[this->memo_size];
-        readData(this->memo, this->memo_size)
+        memo.resize(Util::TwoBytesToInt(size_buf));
+        readData(memo.data(), memo.size())
+
         this->table_begin_pointers = std::vector<uint64_t>(11, 0);
         this->C2 = std::vector<uint64_t>();
 
@@ -395,6 +382,7 @@ public:
 
         // The list of C2 entries is small enough to keep in memory. When proving, we can
         // read from disk the C1 and C3 entries.
+        std::cout << "line 402: " << (int64_t)c2_size << std::endl;
         auto* c2_buf = new uint8_t[c2_size];
         for (uint32_t i = 0; i < c2_entries - 1; i++) {
             readData(c2_buf, c2_size)
@@ -411,7 +399,6 @@ public:
     ~DiskProver()
     {
         std::lock_guard<std::mutex> l(_mtx);
-        delete[] this->memo;
         for (int i = 0; i < 6; i++) {
             Encoding::ANSFree(kRValues[i]);
         }
@@ -419,11 +406,9 @@ public:
         std::cout << "DiskProver destroyed\n";
     }
 
-    void GetMemo(uint8_t* buffer) { memcpy(buffer, memo, this->memo_size); }
+    const std::vector<uint8_t>& GetMemo() { return memo; }
 
-    uint32_t GetMemoSize() const noexcept { return this->memo_size; }
-
-    void GetId(uint8_t* buffer) { memcpy(buffer, id, kIdLen); }
+    const std::vector<uint8_t>& GetId() { return id; }
 
     std::string GetFilename() const noexcept { return filename; }
 
@@ -493,9 +478,6 @@ public:
             }
         }  // Scope for disk_file
 
-        if (this->isRemote){
-            this->cache.flush();
-        }
         return qualities;
     }
 
@@ -542,25 +524,26 @@ public:
             }
         }  // Scope for disk_file
 
+        return full_proof;
+    }
+
+    void FlushCache(){
         if (this->isRemote){
             this->cache.flush();
         }
-        return full_proof;
     }
 
 private:
     mutable std::mutex _mtx;
     std::string filename;
-    uint32_t memo_size;
-    uint8_t* memo;
-    uint8_t id[kIdLen]{};  // Unique plot id
+    std::vector<uint8_t> memo;
+    std::vector<uint8_t> id;  // Unique plot id
     uint8_t k;
     std::vector<uint64_t> table_begin_pointers;
     std::vector<uint64_t> C2;
 
     bool isRemote;
     uint64_t mode;
-    bool isSplit;
     uint64_t splitFileSize;
     uint64_t filesPerURL;
     std::vector<std::string> baseURL;
@@ -583,7 +566,7 @@ private:
         }
     }
 
-    void ExecuteRequestSplit(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
+    void ExecuteRequestOneDrive(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
         if (this->cache.getRange(firstByte, lastByte, target)){
             //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
             return;
@@ -598,6 +581,7 @@ private:
 
         std::string blockNumberString = std::to_string(blockNumberZeroIndex + 1);
         std::string URL = joinString(this->templateURL[blockNumberZeroIndex / this->filesPerURL], blockNumberString);
+        
         
 
         curl_easy_setopt(curl, CURLOPT_URL, URL.c_str());
@@ -617,13 +601,27 @@ private:
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
         headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
         // you may need to enter cookie credentials here
-        //headers = curl_slist_append(headers, "cookie: farming=chia");
+        
+
+
+        uint64_t rangeStart = firstByte % this->splitFileSize;
+        uint64_t rangeEnd = lastByte % this->splitFileSize;
+
+        if (rangeEnd - rangeStart < 8192){
+            rangeEnd = rangeStart + 8191;
+            rangeEnd = std::min(rangeEnd, this->splitFileSize - 1);
+        }
+
+        std::string rangeHeader = "range: bytes=" + std::to_string(rangeStart) + "-" + std::to_string(rangeEnd);
+        headers = curl_slist_append(headers, rangeHeader.c_str());
+
+
 
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
         std::string response_string;
         std::string header_string;
-        response_string.reserve(this->splitFileSize);
+        response_string.reserve(rangeEnd - rangeStart + 1);
 
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
@@ -640,7 +638,7 @@ private:
 
         CURLcode result = curl_easy_perform(curl);
 
-        std::cout << "Curl code: " << result << std::endl;
+        //std::cout << "Curl code: " << result << std::endl;
         
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
@@ -663,14 +661,111 @@ private:
             throw std::runtime_error("Request failed: " + std::to_string(response_code));
         }
 
+        memcpy(target, response_string.data(), lastByte - firstByte + 1);
+        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte, response_string.size());
+    }
+
+
+    void ExecuteRequestDropbox(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
+        if (this->cache.getRange(firstByte, lastByte, target)){
+            //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
+            return;
+        }
+
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            throw std::runtime_error("failed to initialize curl object");
+        }
+
+        uint64_t blockNumberZeroIndex = firstByte / this->splitFileSize;
+
+        std::string blockNumberString = std::to_string(blockNumberZeroIndex + 1);
+        std::string URL = this->baseURL[blockNumberZeroIndex];
         
-        memcpy(target, response_string.data() + firstByte % this->splitFileSize, lastByte - firstByte + 1);
-        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte - firstByte % this->splitFileSize, response_string.size());
+        
+
+        curl_easy_setopt(curl, CURLOPT_URL, URL.c_str());
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+        
+
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, "accept: */*");
+        headers = curl_slist_append(headers, "accept-encoding: identity");
+        headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
+        headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
+        headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
+        headers = curl_slist_append(headers, "sec-fetch-dest: empty");
+        headers = curl_slist_append(headers, "sec-fetch-mode: cors");
+        headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
+        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
+
+
+        uint64_t rangeStart = firstByte % this->splitFileSize;
+        uint64_t rangeEnd = lastByte % this->splitFileSize;
+
+        if (rangeEnd - rangeStart < 8192){
+            rangeEnd = rangeStart + 8191;
+            rangeEnd = std::min(rangeEnd, this->splitFileSize - 1);
+        }
+
+        std::string rangeHeader = "range: bytes=" + std::to_string(rangeStart) + "-" + std::to_string(rangeEnd);
+        headers = curl_slist_append(headers, rangeHeader.c_str());
+
+
+
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        std::string response_string;
+        std::string header_string;
+        response_string.reserve(rangeEnd - rangeStart + 1);
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
+
+        long response_code;
+        
+
+        std::cout << std::endl << "Performing split request, filename " << URL << std::endl;
+        std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
+
+        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+
+        CURLcode result = curl_easy_perform(curl);
+
+        //std::cout << "Curl code: " << result << std::endl;
+        
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
+        timePoint = std::chrono::system_clock::now().time_since_epoch();
+        long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+
+        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
+
+        curl_easy_cleanup(curl);
+        curl_slist_free_all(headers);
+        curl = NULL;
+
+        std::cout << "Request finished, response code: " << response_code << std::endl;
+
+        if (result != 0){
+            throw std::runtime_error("CURL failed");
+        }
+
+        if (response_code - response_code % 100 != 200){
+            throw std::runtime_error("Request failed: " + std::to_string(response_code));
+        }
+
+        memcpy(target, response_string.data(), lastByte - firstByte + 1);
+        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte, response_string.size());
     }
 
 
 
-    void ExecuteRequestWhole(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
+    void ExecuteRequestRange(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
         uint64_t size = lastByte - firstByte + 1;
         
         if (this->cache.getRange(firstByte, lastByte, target)){
@@ -747,17 +842,18 @@ private:
 
 
         memcpy(target, response_string.data(), lastByte - firstByte + 1);
-        this->cache.addItem((uint8_t*)((void*)(response_string.data())), firstByte, response_string.size());
+        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte, response_string.size());
     }
 
 
     void ReadRemote(uint8_t* target, uint64_t seekPosition, uint64_t size){
         switch (this->mode){
-            case remoteMode::range:
-                ExecuteRequestWhole(target, seekPosition, seekPosition + size - 1);
+            case remoteMode::range:{
+                ExecuteRequestRange(target, seekPosition, seekPosition + size - 1);
                 break;
+            }
             
-            case remoteMode::onedrive:
+            case remoteMode::onedrive: {
                 uint64_t firstBlock = seekPosition / this->splitFileSize;
                 uint64_t lastBlock = (seekPosition + size - 1) / this->splitFileSize;
 
@@ -767,15 +863,38 @@ private:
                     uint64_t blockFirstByte = block * this->splitFileSize;
                     uint64_t blockLastByte = (block + 1) * this->splitFileSize - 1;
 
-                    ExecuteRequestSplit(
+                    ExecuteRequestOneDrive(
                         std::max(target + (blockFirstByte - seekPosition), target),
                         std::max(blockFirstByte, seekPosition),
                         std::min(blockLastByte, lastByte)
                         );
                 }
                 break;
+            }
+
+            case remoteMode::dropbox: {
+                //this is basically the same as OneDrive, just the request executor acts slightly differently
+                uint64_t firstBlock = seekPosition / this->splitFileSize;
+                uint64_t lastBlock = (seekPosition + size - 1) / this->splitFileSize;
+
+                uint64_t lastByte = seekPosition + size - 1;
+
+                for (uint64_t block = firstBlock; block <= lastBlock; block++){
+                    uint64_t blockFirstByte = block * this->splitFileSize;
+                    uint64_t blockLastByte = (block + 1) * this->splitFileSize - 1;
+
+                    ExecuteRequestDropbox(
+                        std::max(target + (blockFirstByte - seekPosition), target),
+                        std::max(blockFirstByte, seekPosition),
+                        std::min(blockLastByte, lastByte)
+                        );
+                }
+                break;
+            }
         }
     }
+
+
 
     void SafeRead(std::ifstream& disk_file, uint8_t* target, uint64_t size) {
         int64_t pos = disk_file.tellg();
@@ -808,17 +927,20 @@ private:
 
         // This is the checkpoint at the beginning of the park
         uint16_t line_point_size = EntrySizes::CalculateLinePointSize(k);
+        //std::cout << "line 833: " << line_point_size + 7 << std::endl;
         auto* line_point_bin = new uint8_t[line_point_size + 7];
         readData(line_point_bin, line_point_size)
         uint128_t line_point = Util::SliceInt128FromBytes(line_point_bin, 0, k * 2);
 
         // Reads EPP stubs
         uint32_t stubs_size_bits = EntrySizes::CalculateStubsSize(k) * 8;
+        //std::cout << "line 840: " << stubs_size_bits / 8 + 7 << std::endl;
         auto* stubs_bin = new uint8_t[stubs_size_bits / 8 + 7];
         readData(stubs_bin, stubs_size_bits / 8)
 
         // Reads EPP deltas
         uint32_t max_deltas_size_bits = EntrySizes::CalculateMaxDeltasSize(k, table_index) * 8;
+        //std::cout << "line 846: " << max_deltas_size_bits / 8 << std::endl;
         auto* deltas_bin = new uint8_t[max_deltas_size_bits / 8];
 
         // Reads the size of the encoded deltas object
@@ -954,6 +1076,7 @@ private:
 
         uint32_t c1_entry_size = Util::ByteAlign(k) / 8;
 
+        //std::cout << "line 982: " << c1_entry_size << std::endl;
         auto* c1_entry_bytes = new uint8_t[c1_entry_size];
         seekData(table_begin_pointers[8] + c1_index * Util::ByteAlign(k) / 8)
 
@@ -989,6 +1112,7 @@ private:
         }
 
         uint32_t c3_entry_size = EntrySizes::CalculateC3Size(k);
+        //std::cout << "line 1018: " << c3_entry_size << std::endl;
         auto* bit_mask = new uint8_t[c3_entry_size];
 
         // Double entry means that our entries are in more than one checkpoint park.
@@ -1053,6 +1177,7 @@ private:
 
         // Given the p7 positions, which are all adjacent, we can read the pos6 values from table
         // P7.
+        //std::cout << "line 1083: " << p7_park_size_bytes << std::endl;
         auto* p7_park_buf = new uint8_t[p7_park_size_bytes];
         uint64_t park_index = (p7_positions[0] == 0 ? 0 : p7_positions[0]) / kEntriesPerPark;
         seekData(table_begin_pointers[7] + park_index * p7_park_size_bytes)
@@ -1094,7 +1219,7 @@ private:
     //     Where a < b is defined as:  max(b) > max(a) where a and b are lists of k bit elements
     std::vector<LargeBits> ReorderProof(const std::vector<Bits>& xs_input) const
     {
-        F1Calculator f1(k, id);
+        F1Calculator f1(k, id.data());
         std::vector<std::pair<Bits, Bits> > results;
         LargeBits xs;
 
