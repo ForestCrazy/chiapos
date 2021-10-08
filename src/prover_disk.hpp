@@ -61,13 +61,21 @@
         }
 
 
+
 const std::string blockKeyword("{BLOCK}");
+
+bool cookieThreadExists = false;
+std::string cookiePath;
+char* cookieString = NULL;
 
 enum remoteMode : uint64_t {
     range,
     onedrive,
     dropbox
 };
+
+
+
 
 
 size_t writeResponseChunk(void* ptr, size_t size, size_t nmemb, std::string* data) {
@@ -226,6 +234,47 @@ std::string joinString(std::vector<std::string> stringArray, std::string& sequen
 }
 
 
+void cookieUpdate(bool firstTime){
+    std::ifstream disk_file(cookiePath, std::ios::in | std::ios::binary);
+    
+    // yes, I copypasted this part too
+
+    // get pointer to associated buffer object
+    std::filebuf* pbuf = disk_file.rdbuf();
+
+    // get file size using buffer's members
+    size_t size = pbuf->pubseekoff(0, disk_file.end, disk_file.in);
+    pbuf->pubseekpos(0, disk_file.in);
+
+    // allocate memory to contain file data
+    //std::cout << "line 282: " << size + 1 << std::endl;
+    char* buffer = new char[size + 1];
+    buffer[size] = '\0';
+
+    // get file data
+    pbuf->sgetn(buffer, size);
+
+    if (firstTime){
+        cookieString = buffer;
+    } else {
+        if (strcmp(cookieString, buffer) != 0){
+            delete cookieString;
+            cookieString = buffer;
+        } else {
+            delete buffer;
+        }
+    }
+    
+}
+
+void cookieUpdaterThread(){
+    while (true){
+        std::this_thread::sleep_for(std::chrono::minutes(2));
+        cookieUpdate(false);
+    }
+}
+
+
 // The DiskProver, given a correctly formatted plot file, can efficiently generate valid proofs
 // of space, for a given challenge.
 class DiskProver {
@@ -234,6 +283,20 @@ public:
     // will be used to find and seek to all seven tables, at the time of proving.
     explicit DiskProver(const std::string& filename) : id(kIdLen)
     {
+        if (!cookieThreadExists){
+            char* PATH_VAR = getenv("CHIA_REMOTE_COOKIES_PATH");
+
+            if (PATH_VAR != NULL){
+                cookieThreadExists = true;
+                cookiePath = PATH_VAR;
+
+                cookieUpdate(true);
+                
+                std::thread thread(cookieUpdaterThread);
+                thread.detach();
+            }
+        }
+        
         std::cout << "Loading plot: " << (filename) << std::endl;
         struct plot_header header{};
 
@@ -261,7 +324,6 @@ public:
             pbuf->pubseekpos(0, disk_file.in);
 
             // allocate memory to contain file data
-            //std::cout << "line 282: " << size + 1 << std::endl;
             char* buffer = new char[size + 1];
             buffer[size] = '\0';
 
@@ -600,8 +662,11 @@ private:
         headers = curl_slist_append(headers, "sec-fetch-mode: cors");
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
         headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
-        // you may need to enter cookie credentials here
+        if (cookieString != NULL){
+            headers = curl_slist_append(headers, cookieString);
+        }
         
+
 
 
         uint64_t rangeStart = firstByte % this->splitFileSize;
@@ -799,7 +864,9 @@ private:
         headers = curl_slist_append(headers, "sec-fetch-mode: cors");
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
         headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
-        // you may need to enter cookie credentials here
+        if (cookieString != NULL){
+            headers = curl_slist_append(headers, cookieString);
+        }
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
         std::string response_string;
