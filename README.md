@@ -83,11 +83,11 @@ https://dl.dropboxusercontent.com/s/gwae1g8qg12gdsg/plot-k32-2021-07-17-13-07-77
 At first, you need to find your Dropbox CSRF token, PATH_ROOT and UID.  
 Go to DevTools (CTRL+SHIFT+I or F12 in Chrome)  
 Choose Network tab  
-![Step 1 image tutorial](httpa://kotol.cloud/static/remote_chia_harvester/step1.png)  
+![Step 1 image tutorial](https://kotol.cloud/static/remote_chia_harvester/step1.png)  
 
 Share any file, doesn't matter which.  
 In the request list, look for create_shared_link_with_settings, click it, select headers and scroll down. Here you'll find these 3 values. They should remain unchanged for a long time and over all folders.  
-![Step 2 image tutorial](httpa://kotol.cloud/static/remote_chia_harvester/step2.png)  
+![Step 2 image tutorial](https://kotol.cloud/static/remote_chia_harvester/step2.png)  
 Input the values into strings at the beginning of the script.  
 
 Now enter path to your folder with plot into SPLIT_PLOT_PATH variable at the beginning of the script. Example ```/Chiaplots/plot42```. DO NOT remove the leading slash, Dropbox will refuse to eat such input.  
