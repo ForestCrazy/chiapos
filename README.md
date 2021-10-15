@@ -11,7 +11,7 @@ Latency and stability is the key part, 800 ms maximum to work reliably, under 50
 Plot count is not limited by this program. Thanks to plot filter and pool difficulty scaling, your disk/cloud I/O remains about the same for any amount of plots.
 
 ## --remoteplot-- file description
-These are regular files on your hard drive, in your plots directory. They have the .plot extension, but their filename contains "--remoteplot--" in it. Put it in the beginning of the filename and it will work. Remote plots will add up to plot count, but not total size in logs/GUI, their size is set to 0 bytes.  
+These are regular files on your hard drive, in your plots directory. They have the .plot extension, but their filename contains "--remoteplot--" in it. Put it in the beginning of the filename and it will work. Remote plots will add up to plot count, but not total size in logs/GUI (they will, but only with the on-disk size of the --remoteplot-- file).  
 Contents of these files are specified by their mode. The first line always specifies that mode, upcoming lines specify mode-specific settings.
 
 # Cookie credentials
