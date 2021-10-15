@@ -122,7 +122,6 @@ function getFileListContinue(cursor){
 
 
 
-	let promises = [];
 	let results = [];
 
 	let bytes = 0;
@@ -171,9 +170,6 @@ function getFileListContinue(cursor){
 	console.log(`Determined part size to be ${bytes}`);
 	console.log(`Sharing ${fileList.length} files`);
 
-	Promise.all(promises)
-	.then(() => {
-		console.log("SUCCESS! Here's your auto-generated --remoteplot-- file, if the size on the second line doesn't match, replace it manually.");
-		console.log("dropbox\n" + bytes + "\n" +  results.join("\n"));
-	});
+	console.log("SUCCESS! Here's your auto-generated --remoteplot-- file, if the size on the second line doesn't match, replace it manually.");
+	console.log("dropbox\n" + bytes + "\n" +  results.join("\n"));
 })();
