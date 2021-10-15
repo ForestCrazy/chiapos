@@ -38,10 +38,6 @@ function shareByID(fileID, index){
 				console.log(`Successfully shared file ${fileID}`);
 				resolve(result);
 			} else {
-				console.error("We errored out, aborting.");
-				for (const timeout of timeouts){
-					clearTimeout(timeout);
-				}
 				reject();
 			}
 		});
@@ -162,6 +158,7 @@ function getFileListContinue(cursor){
 				console.log("Got an error while sharing, retrying in 5 seconds...");
 				if (retries === 4){
 					console.error("The same request failed for the 5th time, aborting.");
+					return;
 				} else {
 					await sleep(5000);
 				}
