@@ -1,7 +1,14 @@
 var X_CSRF_TOKEN = "INSERT YOUR CSRF TOKEN HERE";
 var X_DROPBOX_PATH_ROOT = "INSERT PATH ROOT";
 var X_DROPBOX_UID = "INSERT YOUR UID";
-var SPLIT_PLOT_PATH = "/path/to/plot/folder/don't/remove/leading/slash";
+var CONCURRENT_SHARES = 5 // speed multiplier, you can bump it until you start getting error 429 - means that Dropbox is throttling you
+var SPLIT_PLOT_PATH = [
+	"/path/to/plot/folder/don't/remove/leading/slash",
+	"/path/to/plot/folder2/don't/remove/leading/slash",
+	"/path/to/plot/folder3/don't/remove/leading/slash",
+	// add more here
+];
+
 
 function sleep(ms){
 	return new Promise((resolve, reject) => {
@@ -42,6 +49,19 @@ function shareByID(fileID, index){
 			}
 		});
 	});
+}
+
+function download(filename, text) {
+	let element = document.createElement("a");
+	element.setAttribute("href", "data:text/plain;charset=utf-8," + encodeURIComponent(text));
+	element.setAttribute("download", filename);
+  
+	element.style.display = "none";
+	document.body.appendChild(element);
+  
+	element.click();
+  
+	document.body.removeChild(element);
 }
 
 function getFileList(path){
@@ -104,72 +124,105 @@ function getFileListContinue(cursor){
 }
 
 (async function executeShare(){
-	let fileList = [];
-	
-	let body = await getFileList(SPLIT_PLOT_PATH);
-	for (const file of body.paginated_file_info){
-		fileList.push(file.file_info);
-		console.log(`Noticing file ${file.file_info.fq_path} with file_id ${file.file_info.file_id}`);
-	}
+	for (const folder of SPLIT_PLOT_PATH){
+		let awaitedRequests = 0;
 
-	while (body.has_more){
-		body = await getFileListContinue(body.next_request_voucher);
+		let fileList = [];
+		let calls = [];
+
+		let body = await getFileList(folder);
 		for (const file of body.paginated_file_info){
 			fileList.push(file.file_info);
 			console.log(`Noticing file ${file.file_info.fq_path} with file_id ${file.file_info.file_id}`);
 		}
-	}
 
-
-
-	let results = [];
-
-	let bytes = 0;
-
-
-	for (let i = 0; i < fileList.length; i++){
-		const file = fileList[i];
-
-		const filename = file.fq_path.split("/").pop();
-
-		try {
-			const numberString = filename.split("_")[0];
-			var index = Number(numberString) - 1;
-		} catch (error){
-			index = i;
+		while (body.has_more){
+			body = await getFileListContinue(body.next_request_voucher);
+			for (const file of body.paginated_file_info){
+				fileList.push(file.file_info);
+				console.log(`Noticing file ${file.file_info.fq_path} with file_id ${file.file_info.file_id}`);
+			}
 		}
-		
-		if (Number.isNaN(index)){
-			index = i;
-		}
-		
-		const ID = file.file_id;
-		bytes = Math.max(bytes, file.size_bytes);
 
-		let retries = 0;
 
-		while (true){
+		let results = [];
+		let bytes = 0;
+
+		console.log(`Sharing ${fileList.length} files`);
+
+		for (let i = 0; i < fileList.length; i++){
+			
+			const file = fileList[i];
+
+			const filename = file.fq_path.split("/").pop();
+
+			let index;
 			try {
-				const result = await shareByID(ID);
-				results[index] = result;
-				break;
+				const numberString = filename.split("_")[0];
+				index = Number(numberString) - 1;
 			} catch (error){
-				console.log("Got an error while sharing, retrying in 5 seconds...");
-				if (retries === 4){
-					console.error("The same request failed for the 5th time, aborting.");
-					return;
-				} else {
-					await sleep(5000);
+				index = i;
+			}
+			
+			if (Number.isNaN(index)){
+				index = i;
+			}
+			
+			const ID = file.file_id;
+			bytes = Math.max(bytes, file.size_bytes);
+
+			
+			async function scopedShare(){
+				let retries = 0;
+				awaitedRequests++;
+
+				while (true){
+					try {
+						const result = await shareByID(ID);
+						results[index] = result;
+						break;
+					} catch (error){
+						console.log("Got an error while sharing, retrying in 5 seconds...");
+						if (retries === 7){
+							console.error("The same request failed for the 8th time, aborting.");
+							return;
+						} else {
+							await sleep(5000);
+						}
+					}
+
+					retries++;
 				}
+
+				awaitedRequests--;
 			}
 
-			retries++;
+
+			calls.push(scopedShare);
 		}
+
+		console.log(`Determined part size to be ${bytes}`);
+
+		for (const call of calls){
+			while (awaitedRequests === CONCURRENT_SHARES){
+				await sleep(50);
+			}
+
+			call();
+		}
+
+		while (awaitedRequests > 0){
+			await sleep(50);
+		}
+
+		console.log("SUCCESS! Here's your auto-generated --remoteplot-- file, if the size on the second line doesn't match, replace it manually.");
+		
+		const remotePlot = "dropbox\n" + bytes + "\n" +  results.join("\n")
+		let finalFilename = "--remoteplot--";
+		let filenameTemp = (fileList[0].fq_path.split("/").pop()).split("_");
+		filenameTemp.shift();
+		finalFilename += filenameTemp.join("_");
+
+		download(finalFilename, remotePlot);
 	}
-
-	console.log(`Determined part size to be ${bytes}`);
-	console.log(`Sharing ${fileList.length} files`);
-
-	console.log("SUCCESS! Here's your auto-generated --remoteplot-- file, if the size on the second line doesn't match, replace it manually.");
-	console.log("dropbox\n" + bytes + "\n" +  results.join("\n"));
 })();
