@@ -35,13 +35,13 @@ split file size (positive integer)
 files per URL (positive integer)  
 URL list (newline separated, supports LF and CRLF line breaks)  
 
-The issue with OneDrive is described in range mode above, this means that we need to split the big plot to smaller pieces in order to always read from the beginning of a file which is fast. Before uploading, you will have to use a file splitter. GSplit3 is one of them, but there are many others and it is a matter of a few lines of code to write your own. In remote-utilities folder in this repository is a Python file splitter. The parts need to be of the same size, 16 MB is fine, some have reported that 50 MB also works well. They also cannot have any data added to them by the splitter. So make sure to set your splitter to not add any tags, headers or modify the data in any way. Then you need to upload the files.  
+The issue with OneDrive is described in range mode above, this means that we need to split the big plot to smaller pieces in order to read from smaller files, which is fast. Before uploading, you will have to use a file splitter. GSplit3 is one of them, but there are many others and it is a matter of a few lines of code to write your own. In remote-utilities folder in this repository is a Python file splitter. The parts need to be of the same size, 16 MB is fine. Please note that if you try to sync to a weak computer (probably in school, work, etc.) with 60000 files on that OneDrive, it will cause the computer to LAG, in this case, with a slightly higher but still acceptable latencies you can split to 256 MB parts (around 100 ms per request more compared to 16 MB). It will effectively thwart that sync lag. The parts also cannot have any data added to them by the splitter. So make sure to set your splitter to not add any tags, headers or modify the data in any way. Then you need to upload the files.  
 In the end, you will access your parts by their name (get the URL for 1 file by downloading it, copy it), replace the file number in the file name with '{BLOCK}', without quotes. This will make the harvester replace the {BLOCK} keyword with the part number it needs. Parts are counted from 1, not 0, cause it was originally made to work with GSplit3 as splitter.
 
 ### Legacy multi-folder talk
 If you don't want to give your harvester access to your OneDrive account, you will have to share the files in order to access them (some organizations actually block public sharing, so access would be mandatory in such case). OneDrive has a limitation which allows one to share only 50000 files in one folder and all its subfolders. A k32 plot will split to around 220000 parts (WARNING, don't split to 491520 bytes big parts anymore, new code lets you use arbitrary size without any penalty for slow connections, 16 MB parts are the new recommended), so this means that you need to put the files into folders of max file count 50000. You should go for the maximum amount so that you end up with the least amount of folders. These folders also have to be in your root folder, otherwise the subfolder part of the sharing limitation kicks in. You will fill up your folders to the amount specified in "files per URL" and then put whatever remains into the last one. Use as of 8. October 2021 and later would be if you're filling leftover space from multiple accounts with a single plot, you can split the plot between such accounts and specify URLs.
 
-### Example OneDrive configuration
+### Example OneDrive configuration (now, you should only need one URL)
 ```
 onedrive
 491520
@@ -107,7 +107,9 @@ For g++ on Linux, you need to install libcurl4 onto your system. apt-get has it.
 # Install
 You first install an official copy of Chia Blockchain (the one this project is a fork of). Then you need to patch stuff up, download also the modified version of chia-blockchain. In folder chia/plotting you'll find manager.py file, this one needs to be replaced. It will allow for recognizing --remoteplot-- in the filename and skipping plot size check in such case. Then, you replace chiapos module, .pyd on Windows, .so on Linux. You compiled the modified one from this repository, you will need to locate your original copy, usually in venv/lib/python3.x/site-packages. And run it as your regular Chia client. Working with Windows GUI is tricky and not definitive, so for now CLI only.
 
-
+# Donations are highly appreciated :)
+XCH: xch1ww744hcsexjrxf3psqdr3jprzj8hu0a72n9wfcjh7adxrnxxwmus0zj6ag
+BTC (SegWit): bc1q0x53jm98caggdud2yf4x3yng96s4pzrp92ksnl
 
 
 # Chia Proof of Space (original description)
