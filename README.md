@@ -108,7 +108,7 @@ For g++ on Linux, you need to install libcurl4 onto your system. apt-get has it.
 You first install an official copy of Chia Blockchain (the one this project is a fork of). Then you need to patch stuff up, download also the modified version of chia-blockchain. In folder chia/plotting you'll find manager.py file, this one needs to be replaced. It will allow for recognizing --remoteplot-- in the filename and skipping plot size check in such case. Then, you replace chiapos module, .pyd on Windows, .so on Linux. You compiled the modified one from this repository, you will need to locate your original copy, usually in venv/lib/python3.x/site-packages. And run it as your regular Chia client. Working with Windows GUI is tricky and not definitive, so for now CLI only.
 
 # Donations are highly appreciated :)
-XCH: xch1ww744hcsexjrxf3psqdr3jprzj8hu0a72n9wfcjh7adxrnxxwmus0zj6ag
+XCH: xch1ww744hcsexjrxf3psqdr3jprzj8hu0a72n9wfcjh7adxrnxxwmus0zj6ag  
 BTC (SegWit): bc1q0x53jm98caggdud2yf4x3yng96s4pzrp92ksnl
 
 
