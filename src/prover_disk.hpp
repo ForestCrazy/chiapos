@@ -37,6 +37,7 @@
 #include "calculate_bucket.hpp"
 #include "encoding.hpp"
 #include "entry_sizes.hpp"
+#include "serialize.hpp"
 #include "util.hpp"
 
 #ifdef _WIN32
@@ -64,6 +65,14 @@
 
 const std::string blockKeyword("{BLOCK}");
 
+// Values below 20000 bytes forced unnecessary requests
+// due to read patterns experimentally found in quality lookups
+// Values above 30000 will only drain bandwidth and provide
+// no savings on request count
+// Value of 24 kiB is just fine, so don't change this unless
+// you really know why you need it
+const int READAHEAD = 24576;
+
 bool cookieThreadExists = false;
 std::string cookiePath;
 char* cookieString = NULL;
@@ -79,8 +88,6 @@ enum remoteMode : uint64_t {
 
 
 size_t writeResponseChunk(void* ptr, size_t size, size_t nmemb, std::string* data) {
-	//std::cout << *data << std::endl;
-    //std::cout << size * nmemb << std::endl;
     data->append((char*)ptr, size * nmemb);
 	return size * nmemb;
 }
@@ -97,13 +104,18 @@ struct cache_item {
     uint8_t* data;
     uint64_t start;
     uint64_t end;
-    long long accessed;
+    bool isAvailable;
 };
 
 class LocalCache {
 public:
-    LocalCache(){
+    std::mutex lock;
+    std::vector<cache_item> items = std::vector<cache_item>();
 
+    LocalCache(){
+        // chance of reallocation will be absurdly low
+        // with average 64 requests per proof and 8 per quality lookup
+	    this->items.reserve(2048); 
     }
 
     ~LocalCache(){
@@ -115,58 +127,78 @@ public:
     }
 
     bool getRange(uint64_t firstByte, uint64_t lastByte, uint8_t* target){
-        //std::cout << "getRange " << firstByte << "-" << lastByte << std::endl;
         for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
             uint64_t itemStart = this->items[i].start;
             uint64_t itemEnd = this->items[i].end;
             if (itemStart <= firstByte && itemEnd >= lastByte){
+                int sleeps = 0;
+
+                // Other thread has already sent out a request for that range
+                // no need to send another one, we will just wait for the other
+                // thread to get the data for us
+                while (!this->items[i].isAvailable){
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    sleeps++;
+
+                    // Gives the other thread at least 10 seconds
+                    // to finish the request. If it doesn't, then
+                    // we just perform it ourselves
+                    if (sleeps > 10000){
+                        return false;
+                    }
+                }
+                
                 memcpy(target, this->items[i].data + (firstByte - itemStart), lastByte - firstByte + 1);
 
-
-                auto timePoint = std::chrono::system_clock::now().time_since_epoch();
-                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
-                this->items[i].accessed = now;
-
-                //std::cout << "getRange ended true" << std::endl;
                 return true;
             }
         }
-        //std::cout << "getRange ended false" << std::endl;
         return false;
     }
 
-    void cleanUp(){
-        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long deletionPoint = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count() - 5 * 60 * 1000;
-
-        this->lock.lock();
-
-        for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
-            if (this->items[i].accessed < deletionPoint){
-                delete[] (this->items[i].data);
-                this->items.erase(this->items.begin() + i);
-            }
-        }
-
-        this->lock.unlock();
-    }
-
     void flush(){
-        this->lock.lock();
-    
         for (int i = (int)(this->items.size()) - 1; i >= 0; i--){
-            delete[] (this->items[i].data);
+            if (this->items[i].isAvailable){
+                delete[] (this->items[i].data);
+            }
             this->items.erase(this->items.begin() + i);
         }
+    }
+
+    void writeItem(uint8_t* data, size_t index){
+        cache_item item = this->items[index];
+        uint64_t size = item.end - item.start + 1;
+
+        uint8_t* itemData = new uint8_t[size];
+        
+        if (!itemData){
+            throw std::runtime_error("Failed to allocate cache memory");
+        }
+
+        memcpy(itemData, data, size);
+
+        this->items[index].data = itemData;
+        this->items[index].isAvailable = true;
+    }
+
+    size_t createItemForFuture(uint64_t firstByte, uint64_t size){
+        this->lock.lock();
+
+        this->items.push_back({
+            NULL,
+            firstByte,
+            firstByte + size - 1,
+            false
+        });
+
+        size_t index = this->items.size() - 1;
 
         this->lock.unlock();
+
+        return index;
     }
 
     void addItem(uint8_t* data, uint64_t firstByte, uint64_t size){
-        //std::cout << "adding item to cache, range: " << firstByte << " " << firstByte + size - 1 << std::endl;
-        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long now = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint).count();
-        
         uint8_t* itemData = new uint8_t[size];
 
         if (!itemData){
@@ -181,22 +213,16 @@ public:
             itemData,
             firstByte,
             firstByte + size - 1,
-            now
+            true
         });
 
         this->lock.unlock();
     }
-
-    std::mutex lock;
-    std::vector<cache_item> items = std::vector<cache_item>(); 
 };
-
-
-
 
 std::vector<std::string> splitString(const std::string& string, const std::string& sequence){
     std::vector<std::string> result;
-    
+
     size_t previousPosition = 0;
     size_t newPosition = 0;
 
@@ -247,7 +273,6 @@ void cookieUpdate(bool firstTime){
     pbuf->pubseekpos(0, disk_file.in);
 
     // allocate memory to contain file data
-    //std::cout << "line 282: " << size + 1 << std::endl;
     char* buffer = new char[size + 1];
     buffer[size] = '\0';
 
@@ -278,11 +303,14 @@ void cookieUpdaterThread(){
 // The DiskProver, given a correctly formatted plot file, can efficiently generate valid proofs
 // of space, for a given challenge.
 class DiskProver {
-public:    
+public:
+    static const uint16_t VERSION{1};
     // The constructor opens the file, and reads the contents of the file header. The table pointers
     // will be used to find and seek to all seven tables, at the time of proving.
     explicit DiskProver(const std::string& filename) : id(kIdLen)
     {
+        std::cout << "Loading plot: " << (filename) << std::endl;
+        
         if (!cookieThreadExists){
             char* PATH_VAR = getenv("CHIA_REMOTE_COOKIES_PATH");
 
@@ -297,11 +325,9 @@ public:
             }
         }
         
-        std::cout << "Loading plot: " << (filename) << std::endl;
         struct plot_header header{};
 
         std::ifstream disk_file;
-
 
         disk_file = std::ifstream(filename, std::ios::in | std::ios::binary);
 
@@ -458,6 +484,33 @@ public:
         }
     }
 
+    explicit DiskProver(const std::vector<uint8_t>& vecBytes)
+    {
+        Deserializer deserializer(vecBytes);
+        deserializer >> version;
+        if (version != VERSION) {
+            // TODO: Migrate to new version if we change something related to the data structure
+            throw std::invalid_argument("DiskProver: Invalid version.");
+        }
+        deserializer >> filename;
+        deserializer >> memo;
+        deserializer >> id;
+        deserializer >> k;
+        deserializer >> table_begin_pointers;
+        deserializer >> C2;
+    }
+    DiskProver(DiskProver const&) = delete;
+    DiskProver(DiskProver&& other) noexcept
+    {
+        filename = std::move(other.filename);
+        memo = std::move(other.memo);
+        id = std::move(other.id);
+        k = other.k;
+        table_begin_pointers = std::move(other.table_begin_pointers);
+        C2 = std::move(other.C2);
+        version = std::move(other.version);
+    }
+
     ~DiskProver()
     {
         std::lock_guard<std::mutex> l(_mtx);
@@ -472,7 +525,11 @@ public:
 
     const std::vector<uint8_t>& GetId() { return id; }
 
-    std::string GetFilename() const noexcept { return filename; }
+    const std::vector<uint64_t>& GetTableBeginPointers() const noexcept { return table_begin_pointers; }
+    
+    const std::vector<uint64_t>& GetC2() const noexcept { return C2; }
+
+    const std::string& GetFilename() const noexcept { return filename; }
 
     uint8_t GetSize() const noexcept { return k; }
 
@@ -594,8 +651,16 @@ public:
             this->cache.flush();
         }
     }
+    
+    std::vector<uint8_t> ToBytes() const
+    {
+        Serializer serializer;
+        serializer << version << filename << memo << id << k << table_begin_pointers << C2;
+        return serializer.Data();
+    }
 
 private:
+    uint16_t version{VERSION};
     mutable std::mutex _mtx;
     std::string filename;
     std::vector<uint8_t> memo;
@@ -628,6 +693,7 @@ private:
         }
     }
 
+
     void ExecuteRequestOneDrive(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
         if (this->cache.getRange(firstByte, lastByte, target)){
             //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
@@ -636,51 +702,45 @@ private:
 
         CURL* curl = curl_easy_init();
         if (!curl) {
-            throw std::runtime_error("failed to initialize curl object");
+            throw std::runtime_error("Failed to initialize CURL object");
         }
 
         uint64_t blockNumberZeroIndex = firstByte / this->splitFileSize;
 
         std::string blockNumberString = std::to_string(blockNumberZeroIndex + 1);
         std::string URL = joinString(this->templateURL[blockNumberZeroIndex / this->filesPerURL], blockNumberString);
-        
-        
 
         curl_easy_setopt(curl, CURLOPT_URL, URL.c_str());
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
         curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-        
 
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "accept: */*");
         headers = curl_slist_append(headers, "accept-encoding: identity");
         headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
-        headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
+        headers = curl_slist_append(headers, "sec-ch-ua: \".Not/A)Brand\";v=\"99\", \"Google Chrome\";v=\"103\", \"Chromium\";v=\"103\"");
         headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
         headers = curl_slist_append(headers, "sec-fetch-dest: empty");
         headers = curl_slist_append(headers, "sec-fetch-mode: cors");
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
-        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
+        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
         if (cookieString != NULL){
             headers = curl_slist_append(headers, cookieString);
         }
         
-
-
-
         uint64_t rangeStart = firstByte % this->splitFileSize;
         uint64_t rangeEnd = lastByte % this->splitFileSize;
 
-        if (rangeEnd - rangeStart < 8192){
-            rangeEnd = rangeStart + 8191;
+        if (rangeEnd - rangeStart < READAHEAD){
+            rangeEnd = rangeStart + READAHEAD - 1;
             rangeEnd = std::min(rangeEnd, this->splitFileSize - 1);
         }
 
+        size_t cacheFutureIndex = this->cache.createItemForFuture(firstByte, rangeEnd - rangeStart + 1);
+
         std::string rangeHeader = "range: bytes=" + std::to_string(rangeStart) + "-" + std::to_string(rangeEnd);
         headers = curl_slist_append(headers, rangeHeader.c_str());
-
-
 
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
@@ -694,12 +754,11 @@ private:
 
         long response_code;
         
+        // std::cout << std::endl << "Performing split request, filename " << URL << std::endl;
+        // std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
 
-        std::cout << std::endl << "Performing split request, filename " << URL << std::endl;
-        std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
-
-        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+        // auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        // long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
         CURLcode result = curl_easy_perform(curl);
 
@@ -707,16 +766,16 @@ private:
         
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
-        timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+        // timePoint = std::chrono::system_clock::now().time_since_epoch();
+        // long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
-        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
+        // std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
 
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
         curl = NULL;
 
-        std::cout << "Request finished, response code: " << response_code << std::endl;
+        // std::cout << "Request finished, response code: " << response_code << std::endl;
 
         if (result != 0){
             throw std::runtime_error("CURL failed");
@@ -727,7 +786,7 @@ private:
         }
 
         memcpy(target, response_string.data(), lastByte - firstByte + 1);
-        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte, response_string.size());
+        this->cache.writeItem((uint8_t*)(void*)(response_string.data()), cacheFutureIndex);
     }
 
 
@@ -739,7 +798,7 @@ private:
 
         CURL* curl = curl_easy_init();
         if (!curl) {
-            throw std::runtime_error("failed to initialize curl object");
+            throw std::runtime_error("Failed to initialize CURL object");
         }
 
         uint64_t blockNumberZeroIndex = firstByte / this->splitFileSize;
@@ -747,38 +806,37 @@ private:
         std::string blockNumberString = std::to_string(blockNumberZeroIndex + 1);
         std::string URL = this->baseURL[blockNumberZeroIndex];
         
-        
-
         curl_easy_setopt(curl, CURLOPT_URL, URL.c_str());
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
         curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
         
-
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "accept: */*");
         headers = curl_slist_append(headers, "accept-encoding: identity");
         headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
-        headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
+        headers = curl_slist_append(headers, "sec-ch-ua: \".Not/A)Brand\";v=\"99\", \"Google Chrome\";v=\"103\", \"Chromium\";v=\"103\"");
         headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
         headers = curl_slist_append(headers, "sec-fetch-dest: empty");
         headers = curl_slist_append(headers, "sec-fetch-mode: cors");
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
-        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
-
+        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
+        if (cookieString != NULL){
+            headers = curl_slist_append(headers, cookieString);
+        }
 
         uint64_t rangeStart = firstByte % this->splitFileSize;
         uint64_t rangeEnd = lastByte % this->splitFileSize;
 
-        if (rangeEnd - rangeStart < 8192){
-            rangeEnd = rangeStart + 8191;
+        if (rangeEnd - rangeStart < READAHEAD){
+            rangeEnd = rangeStart + READAHEAD - 1;
             rangeEnd = std::min(rangeEnd, this->splitFileSize - 1);
         }
 
+        size_t cacheFutureIndex = this->cache.createItemForFuture(firstByte, rangeEnd - rangeStart + 1);
+
         std::string rangeHeader = "range: bytes=" + std::to_string(rangeStart) + "-" + std::to_string(rangeEnd);
         headers = curl_slist_append(headers, rangeHeader.c_str());
-
-
 
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
@@ -791,13 +849,12 @@ private:
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
 
         long response_code;
-        
 
-        std::cout << std::endl << "Performing split request, filename " << URL << std::endl;
-        std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
+        // std::cout << std::endl << "Performing split request, filename " << URL << std::endl;
+        // std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
 
-        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+        // auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        // long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
         CURLcode result = curl_easy_perform(curl);
 
@@ -805,16 +862,16 @@ private:
         
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
-        timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+        // timePoint = std::chrono::system_clock::now().time_since_epoch();
+        // long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
-        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
+        // std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
 
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
         curl = NULL;
 
-        std::cout << "Request finished, response code: " << response_code << std::endl;
+        // std::cout << "Request finished, response code: " << response_code << std::endl;
 
         if (result != 0){
             throw std::runtime_error("CURL failed");
@@ -825,14 +882,11 @@ private:
         }
 
         memcpy(target, response_string.data(), lastByte - firstByte + 1);
-        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte, response_string.size());
+        this->cache.writeItem((uint8_t*)(void*)(response_string.data()), cacheFutureIndex);
     }
 
 
-
     void ExecuteRequestRange(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
-        uint64_t size = lastByte - firstByte + 1;
-        
         if (this->cache.getRange(firstByte, lastByte, target)){
             //std::cout << "Retrieved " << size << " bytes from cache" << std::endl << std::endl;
             return;
@@ -845,71 +899,79 @@ private:
 
         curl_easy_setopt(curl, CURLOPT_URL, this->baseURL[0].c_str());
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-        //curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.74.0");
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 50L);
         curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-
-
-        char rangeHeader[80];
-        sprintf(rangeHeader, "range: bytes=%llu-%llu", firstByte, size < 4096 ? firstByte + 4095 : lastByte);
 
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "accept: */*");
         headers = curl_slist_append(headers, "accept-encoding: identity");
         headers = curl_slist_append(headers, "accept-language: en,en-GB;q=0.9,en-US;q=0.8,sk;q=0.7,cs;q=0.6");
-        headers = curl_slist_append(headers, rangeHeader);
-        headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\"");
+        headers = curl_slist_append(headers, "sec-ch-ua: \".Not/A)Brand\";v=\"99\", \"Google Chrome\";v=\"103\", \"Chromium\";v=\"103\"");
         headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
         headers = curl_slist_append(headers, "sec-fetch-dest: empty");
         headers = curl_slist_append(headers, "sec-fetch-mode: cors");
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
-        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36");
+        headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
         if (cookieString != NULL){
             headers = curl_slist_append(headers, cookieString);
         }
+
+        uint64_t rangeStart = firstByte % this->splitFileSize;
+        uint64_t rangeEnd = lastByte % this->splitFileSize;
+
+        if (rangeEnd - rangeStart < READAHEAD){
+            rangeEnd = rangeStart + READAHEAD - 1;
+            rangeEnd = std::min(rangeEnd, this->splitFileSize - 1);
+        }
+
+        size_t cacheFutureIndex = this->cache.createItemForFuture(firstByte, rangeEnd - rangeStart + 1);
+
+        std::string rangeHeader = "range: bytes=" + std::to_string(rangeStart) + "-" + std::to_string(rangeEnd);
+        headers = curl_slist_append(headers, rangeHeader.c_str());
+
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
         std::string response_string;
         std::string header_string;
+        response_string.reserve(rangeEnd - rangeStart + 1);
+        
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponseChunk);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
 
         long response_code;
 
+        // std::cout << std::endl << "Performing request, filename " << this->baseURL[0] << std::endl;
+        // std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
 
-        std::cout << std::endl << "Performing request, filename " << this->baseURL[0] << std::endl;
-        std::cout << "Range: " << firstByte << " - " << lastByte << std::endl;
-
-        auto timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+        // auto timePoint = std::chrono::system_clock::now().time_since_epoch();
+        // long long requestStart = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
         CURLcode result = curl_easy_perform(curl);
 
-        std::cout << "Curl code: " << result << std::endl;
-
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
-        timePoint = std::chrono::system_clock::now().time_since_epoch();
-        long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
+        // timePoint = std::chrono::system_clock::now().time_since_epoch();
+        // long long requestEnd = std::chrono::duration_cast<std::chrono::microseconds>(timePoint).count();
 
-        std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
+        // std::cout << "Request took " << ((double)(requestEnd - requestStart)) / 1000 << " ms, retrieved " << response_string.length() << " bytes (" << lastByte - firstByte + 1 << " requested originally)" << std::endl;
 
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
         curl = NULL;
 
-        std::cout << "Request finished, response code: " << response_code << std::endl;
-        //std::cout << header_string << std::endl;
-        //std::cout << response_string << std::endl;
+        // std::cout << "Request finished, response code: " << response_code << std::endl;
 
         if (result != 0){
             throw std::runtime_error("CURL failed");
         }
 
+        if (response_code - response_code % 100 != 200){
+            throw std::runtime_error("Request failed: " + std::to_string(response_code));
+        }
 
         memcpy(target, response_string.data(), lastByte - firstByte + 1);
-        this->cache.addItem((uint8_t*)(void*)(response_string.data()), firstByte, response_string.size());
+        this->cache.writeItem((uint8_t*)(void*)(response_string.data()), cacheFutureIndex);
     }
 
 
@@ -994,20 +1056,17 @@ private:
 
         // This is the checkpoint at the beginning of the park
         uint16_t line_point_size = EntrySizes::CalculateLinePointSize(k);
-        //std::cout << "line 833: " << line_point_size + 7 << std::endl;
         auto* line_point_bin = new uint8_t[line_point_size + 7];
         readData(line_point_bin, line_point_size)
         uint128_t line_point = Util::SliceInt128FromBytes(line_point_bin, 0, k * 2);
 
         // Reads EPP stubs
         uint32_t stubs_size_bits = EntrySizes::CalculateStubsSize(k) * 8;
-        //std::cout << "line 840: " << stubs_size_bits / 8 + 7 << std::endl;
         auto* stubs_bin = new uint8_t[stubs_size_bits / 8 + 7];
         readData(stubs_bin, stubs_size_bits / 8)
 
         // Reads EPP deltas
         uint32_t max_deltas_size_bits = EntrySizes::CalculateMaxDeltasSize(k, table_index) * 8;
-        //std::cout << "line 846: " << max_deltas_size_bits / 8 << std::endl;
         auto* deltas_bin = new uint8_t[max_deltas_size_bits / 8];
 
         // Reads the size of the encoded deltas object
@@ -1204,6 +1263,13 @@ private:
 
             readData(encoded_size_buf, 2)
             encoded_size = Bits(encoded_size_buf, 2, 16).GetValue();
+            
+            // Avoid telling GetP7Positions and functions it uses that we have more
+            // bytes than we allocated for bit_mask above.
+            if (encoded_size > c3_entry_size - 2) {
+                return std::vector<uint64_t>();
+            }
+            
             readData(bit_mask, c3_entry_size - 2)
 
             p7_positions =
@@ -1211,12 +1277,20 @@ private:
 
             readData(encoded_size_buf, 2)
             encoded_size = Bits(encoded_size_buf, 2, 16).GetValue();
+            
+            // Avoid telling GetP7Positions and functions it uses that we have more
+            // bytes than we allocated for bit_mask above.
+            if (encoded_size > c3_entry_size - 2) {
+                return std::vector<uint64_t>();
+            }
+            
             readData(bit_mask, c3_entry_size - 2)
 
             c1_index++;
             curr_p7_pos = c1_index * kCheckpoint1Interval;
             auto second_positions =
                 GetP7Positions(next_f7, f7, curr_p7_pos, bit_mask, encoded_size, c1_index);
+            
             p7_positions.insert(
                 p7_positions.end(), second_positions.begin(), second_positions.end());
 
@@ -1224,6 +1298,13 @@ private:
             seekData(table_begin_pointers[10] + c1_index * c3_entry_size)
             readData(encoded_size_buf, 2)
             encoded_size = Bits(encoded_size_buf, 2, 16).GetValue();
+            
+            // Avoid telling GetP7Positions and functions it uses that we have more
+            // bytes than we allocated for bit_mask above.
+            if (encoded_size > c3_entry_size - 2) {
+                return std::vector<uint64_t>();
+            }
+            
             readData(bit_mask, c3_entry_size - 2)
 
             p7_positions =

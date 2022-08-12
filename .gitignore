@@ -6,7 +6,6 @@ HellmanAttacks
 **/*.dat
 **/*.dat.tmp
 .vscode
-*.code-workspace
 .venv/
 **/__pycache__
 src/python/.aes*
@@ -21,10 +20,8 @@ Makefile
 **/*.rendered.*.cpp
 **/*.cppimporthash
 build
-build-msvc
 .pytest_cache
 **/*.egg-info
 .mypy_cache
 *.whl
 venv
-.eggs

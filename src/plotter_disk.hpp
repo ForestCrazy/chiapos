@@ -23,6 +23,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <fstream>
@@ -199,9 +200,6 @@ public:
         fs::remove(tmp_2_filename);
         fs::remove(final_filename);
 
-        std::ios_base::sync_with_stdio(false);
-        std::ostream* prevstr = std::cin.tie(NULL);
-
         {
             // Scope for FileDisk
             std::vector<FileDisk> tmp_1_disks;
@@ -358,9 +356,6 @@ public:
             all_phases.PrintElapsed("Total time =");
         }
 
-        std::cin.tie(prevstr);
-        std::ios_base::sync_with_stdio(true);
-
         for (fs::path p : tmp_1_filenames) {
             fs::remove(p);
         }
@@ -370,7 +365,13 @@ public:
         Timer copy;
         do {
             std::error_code ec;
-            if (tmp_2_filename.parent_path() == final_filename.parent_path()) {
+            struct stat tmp2_stat, final_stat;
+            int rc;
+            rc = ::stat(reinterpret_cast<const char *>(tmp_2_filename.c_str()), &tmp2_stat);
+            if (rc == 0)
+                rc = ::stat(reinterpret_cast<const char *>(final_filename.parent_path().c_str()), &final_stat);
+            if ((rc == 0 && tmp2_stat.st_dev == final_stat.st_dev) ||
+                tmp_2_filename.parent_path() == final_filename.parent_path()) {
                 fs::rename(tmp_2_filename, final_filename, ec);
                 if (ec.value() != 0) {
                     std::cout << "Could not rename " << tmp_2_filename << " to " << final_filename
