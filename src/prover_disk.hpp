@@ -38,6 +38,7 @@
 #include "encoding.hpp"
 #include "entry_sizes.hpp"
 #include "serialize.hpp"
+#include "serialize.hpp"
 #include "util.hpp"
 
 #ifdef _WIN32
@@ -471,10 +472,21 @@ public:
         // The list of C2 entries is small enough to keep in memory. When proving, we can
         // read from disk the C1 and C3 entries.
         std::cout << "line 402: " << (int64_t)c2_size << std::endl;
+        uint64_t prev_c2_f7 = 0;
         auto* c2_buf = new uint8_t[c2_size];
         for (uint32_t i = 0; i < c2_entries - 1; i++) {
             readData(c2_buf, c2_size)
-            this->C2.push_back(Bits(c2_buf, c2_size, c2_size * 8).Slice(0, k).GetValue());
+
+            const uint64_t f7 = Bits(c2_buf, c2_size, c2_size * 8).Slice(0, k).GetValue();
+
+            // Short-circuit reading of the C2 table as soon as we encounter an f7 entry whose
+            // value is lesser than the previous f7 read. This ensures that we don't read
+            // empty space from C2 tables that are written with file system block-alignment (like bladebit v1 does).
+            if (f7 < prev_c2_f7)
+                break;
+
+            this->C2.push_back(f7);
+            prev_c2_f7 = f7;
         }
 
         delete[] c2_buf;
@@ -526,7 +538,7 @@ public:
     const std::vector<uint8_t>& GetId() { return id; }
 
     const std::vector<uint64_t>& GetTableBeginPointers() const noexcept { return table_begin_pointers; }
-    
+
     const std::vector<uint64_t>& GetC2() const noexcept { return C2; }
 
     const std::string& GetFilename() const noexcept { return filename; }

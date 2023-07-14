@@ -2,20 +2,17 @@ name: Build and Test C++
 
 on: [push, pull_request]
 
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}--${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/long_lived/')) && github.sha || '' }}
+  cancel-in-progress: true
+
 jobs:
   valgrind:
     name: valgrind ubuntu
     runs-on: ubuntu-20.04
     steps:
-
-      - name: Cancel previous runs on the same branch
-        if: ${{ github.ref != 'refs/heads/main' }}
-        uses: styfle/cancel-workflow-action@0.7.0
-        with:
-          access_token: ${{ github.token }}
-      
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: cmake, RunTests, and valgrind on ubuntu-20.04
         run: |
@@ -32,16 +29,9 @@ jobs:
     name: ASAN ubuntu
     runs-on: ubuntu-20.04
     steps:
-      
-      - name: Cancel previous runs on the same branch
-        if: ${{ github.ref != 'refs/heads/main' }}
-        uses: styfle/cancel-workflow-action@0.7.0
-        with:
-          access_token: ${{ github.token }}
-      
       - name: Checkout code
-        uses: actions/checkout@v2
-      
+        uses: actions/checkout@v3
+
       - name: cmake, RunTests with address- and undefined sanitizer on Ubuntu
         run: |
           sudo fallocate -l 16G /swapfile
@@ -60,15 +50,9 @@ jobs:
     name: TSAN ubuntu
     runs-on: ubuntu-20.04
     steps:
-      - name: Cancel previous runs on the same branch
-        if: ${{ github.ref != 'refs/heads/main' }}
-        uses: styfle/cancel-workflow-action@0.7.0
-        with:
-          access_token: ${{ github.token }}
-      
       - name: Checkout code
-        uses: actions/checkout@v2
-      
+        uses: actions/checkout@v3
+
       - name: cmake, RunTests with thread sanitizer on Ubuntu
         run: |
           mkdir build-tsan
@@ -81,15 +65,8 @@ jobs:
     name: Windows Latest
     runs-on: windows-latest
     steps:
-
-    - name: Cancel previous runs on the same branch
-      if: ${{ github.ref != 'refs/heads/main' }}
-      uses: styfle/cancel-workflow-action@0.7.0
-      with:
-        access_token: ${{ github.token }}
-
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: cmake, RunTests with Windows
       run: |
