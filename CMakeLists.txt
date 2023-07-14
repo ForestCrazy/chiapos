@@ -22,7 +22,7 @@ else()
 FetchContent_Declare(
   pybind11-src
   GIT_REPOSITORY https://github.com/pybind/pybind11.git
-  GIT_TAG        v2.6.2
+  GIT_TAG        v2.10.0
 )
 FetchContent_MakeAvailable(pybind11-src)
 endif()
@@ -150,11 +150,30 @@ add_executable(ProofOfSpace
     ${BLAKE3_SRC}
 )
 
+option(BUILD_PROOF_OF_SPACE_STATICALLY "Build ProofOfSpace target statically" OFF)
+IF (BUILD_PROOF_OF_SPACE_STATICALLY)
+  message("Statically build ProofOfSpace")
+  target_link_libraries(ProofOfSpace -static -Wl,--whole-archive -lrt -lpthread -Wl,--no-whole-archive)
+ENDIF()
+
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG        v3.3.2
+)
+FetchContent_MakeAvailable(Catch2)
+
 add_executable(RunTests
-    tests/test-main.cpp
     tests/test.cpp
     src/chacha8.c
     ${BLAKE3_SRC}
+)
+
+target_link_libraries(RunTests
+  PRIVATE
+    fse
+    Threads::Threads
+    Catch2::Catch2
 )
 
 find_package(Threads REQUIRED)
@@ -181,7 +200,7 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
 elseif (MSVC)
   target_link_libraries(chiapos PRIVATE fse Threads::Threads uint128)
   target_link_libraries(ProofOfSpace fse Threads::Threads uint128)
-  target_link_libraries(RunTests fse Threads::Threads uint128)
+  target_link_libraries(RunTests PRIVATE uint128)
 else()
   target_link_libraries(chiapos PRIVATE fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
   target_link_libraries(ProofOfSpace fse ${CURL_LIBRARIES} stdc++fs Threads::Threads)
