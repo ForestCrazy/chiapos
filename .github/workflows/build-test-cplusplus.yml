@@ -1,6 +1,14 @@
 name: Build and Test C++
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+    - main
+  release:
+    types: [published]
+  pull_request:
+    branches:
+    - '**'
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}--${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/long_lived/')) && github.sha || '' }}
@@ -9,10 +17,10 @@ concurrency:
 jobs:
   valgrind:
     name: valgrind ubuntu
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: cmake, RunTests, and valgrind on ubuntu-20.04
         run: |
@@ -27,10 +35,10 @@ jobs:
 
   asan:
     name: ASAN ubuntu
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: cmake, RunTests with address- and undefined sanitizer on Ubuntu
         run: |
@@ -48,10 +56,10 @@ jobs:
 
   tsan:
     name: TSAN ubuntu
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: cmake, RunTests with thread sanitizer on Ubuntu
         run: |
@@ -61,12 +69,27 @@ jobs:
           cmake --build . -- -j 6
           TSAN_OPTIONS="memory_limit_mb=6000" ./RunTests
 
+  mac:
+    name: MacOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: cmake, RunTests on Mac
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          cmake --build . --config Release -j 6
+          ./RunTests
+
   windows:
     name: Windows Latest
     runs-on: windows-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: cmake, RunTests with Windows
       run: |
