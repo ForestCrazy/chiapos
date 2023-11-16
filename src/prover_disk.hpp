@@ -723,7 +723,7 @@ public:
             } else {
                 throw std::invalid_argument("Invalid plot file format");
             }
-            readData(offsetof(struct plot_header, fmt_desc) + fmt_desc_len);
+            seekData(offsetof(struct plot_header, fmt_desc) + fmt_desc_len);
         }
 
         memcpy(id.data(), header.id, sizeof(header.id));
