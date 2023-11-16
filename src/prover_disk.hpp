@@ -569,13 +569,13 @@ public:
             char* PATH_VAR = getenv("CHIA_REMOTE_COOKIES_PATH");
 
             if (PATH_VAR != NULL){
-                cookieThreadExists = true;
+                // cookieThreadExists = true;
                 cookiePath = PATH_VAR;
 
-                cookieUpdate(true);
+                // cookieUpdate(true);
                 
-                std::thread thread(cookieUpdaterThread);
-                thread.detach();
+                // std::thread thread(cookieUpdaterThread);
+                // thread.detach();
             }
         }
         
@@ -1193,6 +1193,50 @@ private:
         }
     }
 
+    char* cookieUser(std::string cookieUser){
+        std::cout << "cookieUser: " << cookieUser << std::endl;
+        std::string fullCookiePath = cookiePath + cookieUser.append(".txt");
+        std::cout << "fullCookiePath: " << fullCookiePath << std::endl;
+        std::ifstream disk_file(fullCookiePath.c_str(), std::ios::in | std::ios::binary);
+        
+        // yes, I copypasted this part too
+
+        // get pointer to associated buffer object
+        std::filebuf* pbuf = disk_file.rdbuf();
+
+        // get file size using buffer's members
+        size_t size = pbuf->pubseekoff(0, disk_file.end, disk_file.in);
+        pbuf->pubseekpos(0, disk_file.in);
+
+        // allocate memory to contain file data
+        //std::cout << "line 282: " << size + 1 << std::endl;
+        char* buffer = new char[size + 1];
+        buffer[size] = '\0';
+
+        // get file data
+        pbuf->sgetn(buffer, size);
+
+        return buffer;
+        
+    }
+
+    std::string queryParams(std::string URL) {
+        std::vector<std::string> cookieFile;
+        cookieFile = splitString(URL, std::string("?"));
+        cookieFile = splitString(cookieFile[1], std::string("&"));
+        for (int i = 0; i < cookieFile.size(); i++)
+        {
+            std::vector<std::string> queryString;
+            queryString = splitString(cookieFile[i], std::string("="));
+            if (queryString[0] == std::string("cookieFile"))
+            {
+                std::string cookieString = queryString[1];
+                return cookieString;
+            }
+        }
+        return std::string("");
+    }
+
 
     void ExecuteRequestOneDrive(uint8_t* target, uint64_t firstByte, uint64_t lastByte){
         if (this->cache.getRange(firstByte, lastByte, target)){
@@ -1225,9 +1269,12 @@ private:
         headers = curl_slist_append(headers, "sec-fetch-mode: cors");
         headers = curl_slist_append(headers, "sec-fetch-site: same-origin");
         headers = curl_slist_append(headers, "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
-        if (cookieString != NULL){
-            headers = curl_slist_append(headers, cookieString);
-        }
+        // if (cookieString != NULL){
+        //     headers = curl_slist_append(headers, cookieString);
+        // }
+        std::string queryStringCookie = queryParams(URL);
+        char* cookie = cookieUser(queryStringCookie);
+        headers = curl_slist_append(headers, cookie);
         
         uint64_t rangeStart = firstByte % this->splitFileSize;
         uint64_t rangeEnd = lastByte % this->splitFileSize;
